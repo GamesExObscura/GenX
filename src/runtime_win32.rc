@@ -1,0 +1,223 @@
+// Resources for the GenX runtime.
+//
+// Paths are relative to this file: the resource compiler resolves them against
+// the .rc's own directory, not the build directory, so this works whatever tree
+// CMake is configured into.
+#include "runtime_resources.hpp"
+
+#include <windows.h>
+
+IDI_APPICON  ICON    "../res/genx.ico"
+IDR_LOGO_PNG RCDATA  "../res/genx.png"
+
+// The controller pictures are optional (see CMakeLists.txt): CMake defines
+// GENX_HAVE_* for the ones present in res/, and the Input tab draws a plain
+// labelled outline for any that are not.
+#ifdef GENX_HAVE_PAD_3BUTTON_PNG
+IDR_PAD_3BUTTON RCDATA "../res/pad_3button.png"
+#endif
+#ifdef GENX_HAVE_PAD_6BUTTON_PNG
+IDR_PAD_6BUTTON RCDATA "../res/pad_6button.png"
+#endif
+#ifdef GENX_HAVE_PAD_JUSTIFIER_PNG
+IDR_PAD_JUSTIFIER RCDATA "../res/pad_justifier.png"
+#endif
+#ifdef GENX_HAVE_PAD_MENACER_PNG
+IDR_PAD_MENACER   RCDATA "../res/pad_menacer.png"
+#endif
+#ifdef GENX_HAVE_PAD_PIANO_PNG
+IDR_PAD_PIANO     RCDATA "../res/pad_piano.png"
+#endif
+
+// The frame. It owns nothing but the tab strip and the two buttons; every
+// setting lives on one of the three pages below.
+IDD_CONFIGURE DIALOGEX 0, 0, 372, 330
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "GenX - Configure"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    CONTROL         "", IDC_CONFIG_TABS, "SysTabControl32", TCS_TABS | TCS_OWNERDRAWFIXED | WS_TABSTOP, 6, 6, 360, 296
+    DEFPUSHBUTTON   "OK", IDOK, 256, 308, 54, 16
+    PUSHBUTTON      "Cancel", IDCANCEL, 314, 308, 52, 16
+END
+
+IDD_NAME DIALOGEX 0, 0, 200, 76
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "GenX"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "", IDC_NAME_PROMPT, 12, 10, 176, 18
+    EDITTEXT        IDC_NAME_EDIT, 12, 32, 176, 13, ES_AUTOHSCROLL
+    DEFPUSHBUTTON   "OK", IDOK, 84, 54, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 138, 54, 50, 14
+END
+
+// Pages. WS_CHILD + DS_CONTROL is what lets tab and arrow keys move between a
+// page's controls and the frame's buttons as though they were one dialog.
+IDD_PAGE_GENERAL DIALOGEX 0, 0, 348, 274
+STYLE DS_SETFONT | DS_FIXEDSYS | DS_CONTROL | WS_CHILD
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    GROUPBOX        "Game folders - where Open ROM starts looking, per system", 365, 8, 2, 332, 90
+    LTEXT           "Genesis", 366, 16, 17, 60, 9
+    EDITTEXT        IDC_GEN_GAMES_GENESIS, 80, 15, 194, 13, ES_AUTOHSCROLL
+    PUSHBUTTON      "Browse...", IDC_GEN_GAMES_GENESIS_BROWSE, 280, 14, 52, 15
+    LTEXT           "Game Gear", 367, 16, 37, 60, 9
+    EDITTEXT        IDC_GEN_GAMES_GG, 80, 35, 194, 13, ES_AUTOHSCROLL
+    PUSHBUTTON      "Browse...", IDC_GEN_GAMES_GG_BROWSE, 280, 34, 52, 15
+    LTEXT           "32X", 368, 16, 57, 60, 9
+    EDITTEXT        IDC_GEN_GAMES_32X, 80, 55, 194, 13, ES_AUTOHSCROLL
+    PUSHBUTTON      "Browse...", IDC_GEN_GAMES_32X_BROWSE, 280, 54, 52, 15
+    LTEXT           "Sega CD", 369, 16, 77, 60, 9
+    EDITTEXT        IDC_GEN_GAMES_CD, 80, 75, 194, 13, ES_AUTOHSCROLL
+    PUSHBUTTON      "Browse...", IDC_GEN_GAMES_CD_BROWSE, 280, 74, 52, 15
+
+    GROUPBOX        "Save folders", 370, 8, 96, 332, 90
+    LTEXT           "Genesis", 371, 16, 111, 60, 9
+    EDITTEXT        IDC_GEN_SAVE_GENESIS, 80, 109, 194, 13, ES_AUTOHSCROLL
+    PUSHBUTTON      "Browse...", IDC_GEN_SAVE_GENESIS_BROWSE, 280, 108, 52, 15
+    LTEXT           "Game Gear", 372, 16, 131, 60, 9
+    EDITTEXT        IDC_GEN_SAVE_GG, 80, 129, 194, 13, ES_AUTOHSCROLL
+    PUSHBUTTON      "Browse...", IDC_GEN_SAVE_GG_BROWSE, 280, 128, 52, 15
+    LTEXT           "32X", 373, 16, 151, 60, 9
+    EDITTEXT        IDC_GEN_SAVE_32X, 80, 149, 194, 13, ES_AUTOHSCROLL
+    PUSHBUTTON      "Browse...", IDC_GEN_SAVE_32X_BROWSE, 280, 148, 52, 15
+    LTEXT           "Sega CD", 374, 16, 171, 60, 9
+    EDITTEXT        IDC_GEN_SAVE_CD, 80, 169, 194, 13, ES_AUTOHSCROLL
+    PUSHBUTTON      "Browse...", IDC_GEN_SAVE_CD_BROWSE, 280, 168, 52, 15
+
+    AUTOCHECKBOX    "&Hide the mouse cursor during gameplay", IDC_GEN_HIDE_CURSOR, 8, 192, 240, 12
+    LTEXT           "Light guns override hiding the mouse: a Justifier uses an emulated crosshair, the Menacer uses in-game crosshairs.", IDC_GEN_GUN_NOTE, 18, 205, 320, 18
+
+    LTEXT           "Volume", 375, 8, 232, 34, 9
+    CONTROL         "", IDC_GEN_VOLUME, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 44, 228, 200, 20
+    LTEXT           "100%", IDC_GEN_VOLUME_VALUE, 250, 232, 30, 9
+    AUTOCHECKBOX    "&Mute", IDC_GEN_MUTE, 288, 231, 50, 12
+
+    AUTOCHECKBOX    "Console output &filter (low-pass, 3.4kHz)", IDC_GEN_CONSOLE_FILTER, 8, 251, 240, 12
+    LTEXT           "The Mega Drive's own output stage. Off is brighter than the hardware ever was.", 376, 18, 264, 320, 9
+END
+
+IDD_PAGE_INPUT DIALOGEX 0, 0, 348, 274
+STYLE DS_SETFONT | DS_FIXEDSYS | DS_CONTROL | WS_CHILD
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "Player 1", IDC_IN_P1_LABEL, 8, 4, 40, 9
+    COMBOBOX        IDC_IN_P1_KIND, 50, 2, 84, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    COMBOBOX        IDC_IN_P1_DEVICE, 140, 2, 100, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Click a box to bind, right-click to clear.", IDC_IN_NOTE, 250, 4, 90, 26
+    LTEXT           "Profile", IDC_IN_PROFILE_LABEL, 8, 20, 26, 9
+    COMBOBOX        IDC_IN_PROFILE, 50, 18, 98, 160, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON      "Save as...", IDC_IN_PROFILE_SAVE, 152, 17, 46, 14
+    PUSHBUTTON      "Delete", IDC_IN_PROFILE_DELETE, 202, 17, 42, 14
+    CONTROL         "", IDC_IN_P1_PIC, "Static", SS_OWNERDRAW | SS_NOTIFY, 8, 36, 332, 88
+
+    CONTROL         "", IDC_IN_DIVIDER, "Static", SS_ETCHEDHORZ, 8, 128, 332, 1
+
+    LTEXT           "Player 2", IDC_IN_P2_LABEL, 8, 136, 40, 9
+    COMBOBOX        IDC_IN_P2_KIND, 50, 134, 84, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    COMBOBOX        IDC_IN_P2_DEVICE, 140, 134, 100, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Profile", IDC_IN_P2_PROFILE_LABEL, 8, 152, 26, 9
+    COMBOBOX        IDC_IN_P2_PROFILE, 50, 150, 98, 160, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON      "Save as...", IDC_IN_P2_PROFILE_SAVE, 152, 149, 46, 14
+    PUSHBUTTON      "Delete", IDC_IN_P2_PROFILE_DELETE, 202, 149, 42, 14
+    CONTROL         "", IDC_IN_P2_PIC, "Static", SS_OWNERDRAW | SS_NOTIFY, 8, 168, 332, 88
+    LTEXT           "", IDC_IN_P2_NOTE, 8, 258, 332, 14
+END
+
+IDD_PAGE_HOTKEYS DIALOGEX 0, 0, 348, 274
+STYLE DS_SETFONT | DS_FIXEDSYS | DS_CONTROL | WS_CHILD
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "Double-click an action, or select it and press Assign, then press the keys to bind. Esc cancels.", IDC_HK_NOTE, 8, 5, 332, 9
+    CONTROL         "", IDC_HK_LIST, "SysListView32", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOSORTHEADER | WS_BORDER | WS_TABSTOP, 8, 18, 332, 232
+    PUSHBUTTON      "Assign", IDC_HK_ASSIGN, 8, 255, 56, 15
+    PUSHBUTTON      "Clear", IDC_HK_CLEAR, 68, 255, 56, 15
+    PUSHBUTTON      "Restore defaults", IDC_HK_DEFAULTS, 128, 255, 78, 15
+END
+
+// BIOS. One system needs firmware today and it does not strictly need it, so
+// the page leads with that rather than making the box look mandatory.
+IDD_PAGE_BIOS DIALOGEX 0, 0, 348, 274
+STYLE DS_SETFONT | DS_FIXEDSYS | DS_CONTROL | WS_CHILD
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    GROUPBOX        "32X", 424, 8, 2, 332, 92
+    LTEXT           "Folder holding the three 32X firmware images.", 425, 16, 16, 316, 9
+    LTEXT           "Folder", 426, 16, 36, 30, 9
+    EDITTEXT        IDC_BIOS_32X, 50, 34, 224, 13, ES_AUTOHSCROLL
+    PUSHBUTTON      "Browse...", IDC_BIOS_32X_BROWSE, 280, 33, 52, 15
+    LTEXT           "", IDC_BIOS_32X_STATUS, 50, 52, 282, 9
+    LTEXT           "GenX does not require the three BIOS files to play 32X games. GenX has its own startup code for 32X games. If left empty, GenX will search for BIOS files in your game folder.", 427, 16, 63, 316, 27
+
+    LTEXT           "The three files are recognized by size, not by name: 256 bytes for Mega Drive/Genesis, 2048 for the Master SH-2, and 1024 for the Slave SH-2. All three files MUST be in the same folder.", 428, 8, 99, 332, 28
+
+    GROUPBOX        "Sega CD", 429, 8, 130, 332, 138
+    LTEXT           "Folder holding the Sega CD / Mega-CD BIOS images - one per region.", 430, 16, 144, 316, 9
+    LTEXT           "Folder", 431, 16, 164, 30, 9
+    EDITTEXT        IDC_BIOS_SEGACD, 50, 162, 224, 13, ES_AUTOHSCROLL
+    PUSHBUTTON      "Browse...", IDC_BIOS_SEGACD_BROWSE, 280, 161, 52, 15
+    // Four lines and a tab stop: the status names the file each region will
+    // boot from, which is longer than one line and is the point of it.
+    LTEXT           "", IDC_BIOS_SEGACD_STATUS, 50, 180, 282, 44, SS_LEFTNOWORDWRAP | SS_NOPREFIX
+    LTEXT           "Required: Sega CD cannot start without its BIOS, and a disc only boots on its own region's (USA discs on a USA BIOS, and so on). If left empty, GenX will look for BIOS files in your game folder.", 435, 16, 228, 316, 28
+END
+
+IDD_NETPLAY DIALOGEX 0, 0, 250, 188
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "GenX - Netplay"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "", IDC_NET_HEADING, 12, 8, 226, 18
+    LTEXT           "Nickname", IDC_NET_NICKNAME_LABEL, 12, 34, 60, 9
+    EDITTEXT        IDC_NET_NICKNAME, 76, 32, 162, 13, ES_AUTOHSCROLL
+    LTEXT           "Host address", IDC_NET_ADDRESS_LABEL, 12, 52, 60, 9
+    EDITTEXT        IDC_NET_ADDRESS, 76, 50, 162, 13, ES_AUTOHSCROLL
+    LTEXT           "Port", IDC_NET_PORT_LABEL, 12, 70, 60, 9
+    EDITTEXT        IDC_NET_PORT, 76, 68, 60, 13, ES_NUMBER
+    LTEXT           "Passphrase", IDC_NET_PASSPHRASE_LABEL, 12, 88, 60, 9
+    EDITTEXT        IDC_NET_PASSPHRASE, 76, 86, 162, 13, ES_AUTOHSCROLL
+    LTEXT           "Input delay", IDC_NET_DELAY_LABEL, 12, 106, 60, 9
+    EDITTEXT        IDC_NET_DELAY, 76, 104, 30, 13, ES_NUMBER
+    AUTOCHECKBOX    "I play as player &2 (the joiner takes player 1)", IDC_NET_PLAY_AS_TWO, 76, 120, 162, 12
+    LTEXT           "", IDC_NET_NOTE, 12, 136, 226, 26
+    DEFPUSHBUTTON   "OK", IDOK, 134, 166, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 188, 166, 50, 14
+END
+
+// Game Genie. A list of codes with a tick each, and a row to add one.
+// Deliberately modeless in feel - a code is typed, tried, and turned off
+// again while the game keeps playing behind the dialog.
+IDD_GAME_GENIE DIALOGEX 0, 0, 380, 268
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "GenX - Game Genie"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "", IDC_GG_NOTE, 10, 8, 360, 18
+    CONTROL         "", IDC_GG_LIST, "SysListView32", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOSORTHEADER | WS_BORDER | WS_TABSTOP, 10, 30, 360, 130
+    AUTOCHECKBOX    "Only show codes for the game that is &loaded", IDC_GG_ONLY_THIS, 10, 166, 190, 12
+    LTEXT           "Code", IDC_GG_CODE_LABEL, 10, 186, 26, 9
+    EDITTEXT        IDC_GG_CODE, 40, 184, 96, 13, ES_AUTOHSCROLL | ES_UPPERCASE
+    LTEXT           "What it does", IDC_GG_DESCRIPTION_LABEL, 144, 186, 46, 9
+    EDITTEXT        IDC_GG_DESCRIPTION, 194, 184, 176, 13, ES_AUTOHSCROLL
+    PUSHBUTTON      "&Add", IDC_GG_ADD, 10, 204, 56, 15
+    PUSHBUTTON      "&Remove", IDC_GG_REMOVE, 70, 204, 56, 15
+    PUSHBUTTON      "&Use for this game", IDC_GG_USE_HERE, 130, 204, 90, 15
+    AUTOCHECKBOX    "Codes &enabled", IDC_GG_ENABLE, 232, 206, 90, 12
+    LTEXT           "", IDC_GG_STATUS, 10, 226, 360, 18
+    DEFPUSHBUTTON   "Close", IDOK, 320, 248, 50, 14
+END
+
+IDD_ASPECT DIALOGEX 0, 0, 210, 96
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "GenX - Custom Aspect Ratio"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "Shape of the picture, in pixels. Only the ratio matters.", IDC_ASPECT_NOTE, 12, 10, 186, 18
+    LTEXT           "Width", -1, 12, 34, 30, 9
+    EDITTEXT        IDC_ASPECT_WIDTH, 46, 32, 44, 13, ES_NUMBER
+    LTEXT           "Height", -1, 106, 34, 32, 9
+    EDITTEXT        IDC_ASPECT_HEIGHT, 142, 32, 44, 13, ES_NUMBER
+    DEFPUSHBUTTON   "OK", IDOK, 94, 74, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 148, 74, 50, 14
+END

@@ -1,0 +1,22 @@
+# Build output
+/build/
+/out/
+/.vs/
+CMakeUserPresets.json
+*.user
+
+# Never commit games, BIOS images, saves or states
+*.bin
+*.gen
+*.smd
+*.32x
+*.gg
+*.sms
+*.cue
+*.iso
+*.chd
+*.zip
+*.srm
+*.eep
+*.brm
+*.st[0-9]*

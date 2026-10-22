@@ -130,6 +130,9 @@
 // Cheats. Its own menu for the same reason: a code is typed while playing.
 #define IDM_CHEAT_GAME_GENIE 40601
 
+// Help. Asks GitHub for the newest release and says whether this is it.
+#define IDM_HELP_CHECK_UPDATES 40701
+
 // Game Genie codes: a list, an entry box and the usual add/remove. Its own
 // 600 block - the 400s are full of BIOS-page control ids and reusing numbers
 // across dialogs is legal but reads as a collision.
@@ -183,6 +186,7 @@
 #define IDC_GEN_VOLUME_VALUE 334
 #define IDC_GEN_MUTE 335
 #define IDC_GEN_CONSOLE_FILTER 336
+#define IDC_GEN_CHECK_UPDATES 337
 // Labels. They carry real IDs rather than -1 because the theming code walks the
 // page by ID to colour them. The range must cover EVERY label on the page, so
 // it lives above the other pages' controls where there is room to grow: two

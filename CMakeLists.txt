@@ -91,9 +91,17 @@ add_executable(genx WIN32
 
 # gdiplus decodes the embedded logo PNG (it keeps the alpha channel, which a
 # build-time conversion to a bitmap would lose); dwmapi darkens the title bar;
-# comdlg32 is the Open ROM dialog.
+# comdlg32 is the Open ROM dialog; winhttp asks GitHub for the newest release.
 target_link_libraries(genx PRIVATE mercury gdiplus dwmapi comdlg32 msimg32 ole32 shell32 comctl32
-                                   xinput dinput8 dxguid d2d1)
+                                   xinput dinput8 dxguid d2d1 winhttp)
+
+# The version this build calls itself, which the update check compares with
+# the newest release on GitHub. Bump it with each release. It can be overridden
+# when configuring (-DGENX_VERSION=0.9.0) to test the "new version" message.
+if(NOT GENX_VERSION)
+    set(GENX_VERSION 1.1.0)
+endif()
+target_compile_definitions(genx PRIVATE GENX_VERSION="${GENX_VERSION}")
 
 # The controller pictures in res/ are optional. A tree without them - the
 # published source leaves out pictures whose origin is not known - still

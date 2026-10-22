@@ -31,14 +31,14 @@ IDR_PAD_PIANO     RCDATA "../res/pad_piano.png"
 
 // The frame. It owns nothing but the tab strip and the two buttons; every
 // setting lives on one of the three pages below.
-IDD_CONFIGURE DIALOGEX 0, 0, 372, 330
+IDD_CONFIGURE DIALOGEX 0, 0, 372, 346
 STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "GenX - Configure"
 FONT 9, "Segoe UI", 400, 0, 0x1
 BEGIN
-    CONTROL         "", IDC_CONFIG_TABS, "SysTabControl32", TCS_TABS | TCS_OWNERDRAWFIXED | WS_TABSTOP, 6, 6, 360, 296
-    DEFPUSHBUTTON   "OK", IDOK, 256, 308, 54, 16
-    PUSHBUTTON      "Cancel", IDCANCEL, 314, 308, 52, 16
+    CONTROL         "", IDC_CONFIG_TABS, "SysTabControl32", TCS_TABS | TCS_OWNERDRAWFIXED | WS_TABSTOP, 6, 6, 360, 312
+    DEFPUSHBUTTON   "OK", IDOK, 256, 324, 54, 16
+    PUSHBUTTON      "Cancel", IDCANCEL, 314, 324, 52, 16
 END
 
 IDD_NAME DIALOGEX 0, 0, 200, 76
@@ -54,7 +54,7 @@ END
 
 // Pages. WS_CHILD + DS_CONTROL is what lets tab and arrow keys move between a
 // page's controls and the frame's buttons as though they were one dialog.
-IDD_PAGE_GENERAL DIALOGEX 0, 0, 348, 274
+IDD_PAGE_GENERAL DIALOGEX 0, 0, 348, 290
 STYLE DS_SETFONT | DS_FIXEDSYS | DS_CONTROL | WS_CHILD
 FONT 9, "Segoe UI", 400, 0, 0x1
 BEGIN
@@ -96,6 +96,8 @@ BEGIN
 
     AUTOCHECKBOX    "Console output &filter (low-pass, 3.4kHz)", IDC_GEN_CONSOLE_FILTER, 8, 251, 240, 12
     LTEXT           "The Mega Drive's own output stage. Off is brighter than the hardware ever was.", 376, 18, 264, 320, 9
+
+    AUTOCHECKBOX    "Check for &updates when GenX starts", IDC_GEN_CHECK_UPDATES, 8, 278, 240, 12
 END
 
 IDD_PAGE_INPUT DIALOGEX 0, 0, 348, 274

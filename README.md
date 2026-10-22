@@ -17,7 +17,7 @@ It also has netplay, light guns, the Miracle Piano and Game Genie codes.
 
 GenX does not come with any games or BIOS files. You need your own.
 
-**[Download the latest release](https://github.com/GamesExObscura/GenX/releases/latest)** · [FAQ](FAQ.md) · [Report a bug](https://github.com/GamesExObscura/GenX/issues)
+**[Download the latest release](https://github.com/GamesExObscura/GenX/releases/latest)** · [FAQ](FAQ.md) · [Changelog](CHANGELOG.md) · [Report a bug](https://github.com/GamesExObscura/GenX/issues)
 
 ---
 
@@ -94,6 +94,18 @@ Starting isn't the same as being perfect, so bug reports are welcome.
 
 Settings, saves, save states and logs live in `%APPDATA%\GenX`. **File → Open
 GenX folder** takes you there.
+
+**Portable mode:** make a folder named `User` next to `genx.exe`, and GenX
+keeps everything in it instead, so the whole thing can live on a USB stick. To
+bring your current setup with you, copy what's in `%APPDATA%\GenX` into the
+`User` folder.
+
+**Updates:** when GenX starts, it asks GitHub whether there's a newer release
+and tells you if there is. **Help → Check for updates** checks at any time. To
+stop the startup check, untick **Check for updates when GenX starts** in
+**Emulation → Configure → General**. GenX doesn't check when a front end such as
+LaunchBox starts it with a game, and the check sends nothing about you or your
+games.
 
 ## Default controls
 

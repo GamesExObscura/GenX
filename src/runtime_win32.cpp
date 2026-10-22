@@ -16,6 +16,8 @@
 #include <d2d1.h>
 #include <dwmapi.h>
 #include <shlobj.h>
+// The update check: one HTTPS request to GitHub, with no library to ship.
+#include <winhttp.h>
 // DBT_DEVNODES_CHANGED, for noticing a controller plugged in while a game runs.
 #include <dbt.h>
 #include <xinput.h>
@@ -517,6 +519,11 @@ struct RuntimeState {
     bool paused = false;
     bool dark_theme = true;
     bool hide_cursor = false;
+    // Ask GitHub for the newest release at startup. The answer arrives on the
+    // window as a message; the flag stops a second request starting while one
+    // is still out.
+    bool check_for_updates = true;
+    bool update_check_running = false;
     int view_scale = 0;  // 0 = the per-machine default
     Aspect aspect = Aspect::stretch;
     int custom_aspect_width = 16;
@@ -3969,19 +3976,58 @@ void apply_window_theme(HWND hwnd, bool dark) {
     InvalidateRect(hwnd, nullptr, TRUE);
 }
 
-// Where the recent list is kept. %APPDATA% rather than beside the executable:
-// the build directory is wiped and regenerated regularly, and a list that
-// disappears with a rebuild is not a list.
-std::filesystem::path recent_file_path() {
-    wchar_t* base = nullptr;
-    std::filesystem::path directory;
-    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &base)) &&
-        base != nullptr) {
-        directory = std::filesystem::path(base) / L"GenX";
-        CoTaskMemFree(base);
-    } else {
-        directory = std::filesystem::temp_directory_path() / L"GenX";
+// The folder genx.exe is running from.
+std::filesystem::path executable_directory() {
+    std::wstring module(MAX_PATH, L'\0');
+    for (;;) {
+        const DWORD length =
+            GetModuleFileNameW(nullptr, module.data(), static_cast<DWORD>(module.size()));
+        if (length == 0) {
+            return {};
+        }
+        if (length < module.size()) {
+            module.resize(length);
+            return std::filesystem::path(module).parent_path();
+        }
+        // Truncated: a path longer than MAX_PATH. Try again with more room.
+        module.resize(module.size() * 2);
     }
+}
+
+// Where everything GenX writes is kept: settings, the recent list, saves,
+// states, profiles, cheats and logs. %APPDATA% rather than beside the
+// executable: the build directory is wiped and regenerated regularly, and a
+// list that disappears with a rebuild is not a list.
+//
+// Portable mode is the exception, and it is switched on by the folder itself:
+// a folder named User beside genx.exe is used instead, so a copy on a USB
+// stick carries its own settings and saves with it. Decided once, at the first
+// call, so one run never writes to both places.
+std::filesystem::path data_directory() {
+    static const std::filesystem::path directory = [] {
+        std::error_code ignored;
+        const auto beside = executable_directory();
+        if (!beside.empty() && std::filesystem::is_directory(beside / L"User", ignored)) {
+            return beside / L"User";
+        }
+        wchar_t* base = nullptr;
+        std::filesystem::path appdata;
+        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &base)) &&
+            base != nullptr) {
+            appdata = std::filesystem::path(base) / L"GenX";
+        } else {
+            appdata = std::filesystem::temp_directory_path(ignored) / L"GenX";
+        }
+        if (base != nullptr) {
+            CoTaskMemFree(base);
+        }
+        return appdata;
+    }();
+    return directory;
+}
+
+std::filesystem::path recent_file_path() {
+    const auto directory = data_directory();
     std::error_code ignored;
     std::filesystem::create_directories(directory, ignored);
     return directory / L"recent.txt";
@@ -4038,6 +4084,8 @@ void load_settings(RuntimeState& state) {
             state.dark_theme = value != "0";
         } else if (key == "hide_cursor") {
             state.hide_cursor = value != "0";
+        } else if (key == "check_for_updates") {
+            state.check_for_updates = value != "0";
         } else if (key == "view_scale") {
             const int scale = std::atoi(value.c_str());
             if (scale >= 0 && scale <= 4) {
@@ -4214,6 +4262,7 @@ void save_settings(const RuntimeState& state) {
     out << "settings_version=2\n";
     out << "dark_theme=" << (state.dark_theme ? 1 : 0) << "\n";
     out << "hide_cursor=" << (state.hide_cursor ? 1 : 0) << "\n";
+    out << "check_for_updates=" << (state.check_for_updates ? 1 : 0) << "\n";
     out << "view_scale=" << state.view_scale << "\n";
     out << "aspect=" << static_cast<int>(state.aspect) << "\n";
     out << "custom_aspect_width=" << state.custom_aspect_width << "\n";
@@ -4895,6 +4944,10 @@ HMENU build_menu(RuntimeState& state) {
     // The Miracle Piano game needs its keyboard, and nobody has one.
     AppendMenuW(tools, MF_STRING, IDM_TOOLS_MIRACLE_PIANO, L"&Miracle Piano keyboard\tM");
     AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(tools), L"&Tools");
+
+    HMENU help = CreatePopupMenu();
+    AppendMenuW(help, MF_STRING, IDM_HELP_CHECK_UPDATES, L"Check for &updates...");
+    AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(help), L"&Help");
 
     return bar;
 }
@@ -5859,6 +5912,7 @@ constexpr int kConfigPageCount = 4;
 struct ConfigDraft {
     RuntimeState* state = nullptr;
     bool hide_cursor = false;
+    bool check_for_updates = true;
     int volume = 100;
     bool muted = false;
     bool console_filter = true;
@@ -6100,6 +6154,8 @@ INT_PTR CALLBACK general_page_proc(HWND page, UINT message, WPARAM wparam, LPARA
             set_path_field(page, IDC_GEN_SAVE_CD, init->save_folders[kSaveCd]);
             CheckDlgButton(page, IDC_GEN_HIDE_CURSOR,
                            init->hide_cursor ? BST_CHECKED : BST_UNCHECKED);
+            CheckDlgButton(page, IDC_GEN_CHECK_UPDATES,
+                           init->check_for_updates ? BST_CHECKED : BST_UNCHECKED);
             CheckDlgButton(page, IDC_GEN_MUTE, init->muted ? BST_CHECKED : BST_UNCHECKED);
             CheckDlgButton(page, IDC_GEN_CONSOLE_FILTER,
                            init->console_filter ? BST_CHECKED : BST_UNCHECKED);
@@ -6205,6 +6261,7 @@ void commit_general_page(HWND page, ConfigDraft& draft) {
     draft.save_folders[kSave32X] = get_path_field(page, IDC_GEN_SAVE_32X);
     draft.save_folders[kSaveCd] = get_path_field(page, IDC_GEN_SAVE_CD);
     draft.hide_cursor = IsDlgButtonChecked(page, IDC_GEN_HIDE_CURSOR) == BST_CHECKED;
+    draft.check_for_updates = IsDlgButtonChecked(page, IDC_GEN_CHECK_UPDATES) == BST_CHECKED;
     draft.muted = IsDlgButtonChecked(page, IDC_GEN_MUTE) == BST_CHECKED;
     draft.console_filter = IsDlgButtonChecked(page, IDC_GEN_CONSOLE_FILTER) == BST_CHECKED;
     draft.volume =
@@ -7957,6 +8014,7 @@ INT_PTR CALLBACK configure_proc(HWND dialog, UINT message, WPARAM wparam, LPARAM
                     commit_bios_page(draft->pages[3], *draft);
                     RuntimeState& state = *draft->state;
                     state.hide_cursor = draft->hide_cursor;
+                    state.check_for_updates = draft->check_for_updates;
                     state.volume = draft->volume;
                     state.muted = draft->muted;
                     state.console_filter = draft->console_filter;
@@ -8441,6 +8499,7 @@ void show_configure(RuntimeState& state) {
     ConfigDraft draft;
     draft.state = &state;
     draft.hide_cursor = state.hide_cursor;
+    draft.check_for_updates = state.check_for_updates;
     draft.volume = state.volume;
     draft.muted = state.muted;
     draft.console_filter = state.console_filter;
@@ -10946,6 +11005,166 @@ void step_gear_link_frame(RuntimeState& primary) {
     }
 }
 
+// --- new versions ------------------------------------------------------------
+
+// This build's version, from CMakeLists.txt.
+constexpr wchar_t kGenxVersion[] = L"" GENX_VERSION;
+// Where a new version is downloaded from. Fixed here rather than taken from
+// GitHub's reply, so the button can only ever open GenX's own release page.
+constexpr wchar_t kReleasesPage[] = L"https://github.com/GamesExObscura/GenX/releases/latest";
+// Well clear of WM_APP + 1, which the binding capture already uses.
+constexpr UINT WM_APP_UPDATE_CHECKED = WM_APP + 20;
+
+// What came back from GitHub, handed from the checking thread to the window.
+struct UpdateCheck {
+    std::wstring latest;  // the newest release's tag, "v1.2.0"; empty if unknown
+    bool asked = false;   // Help > Check for updates, rather than at startup
+};
+
+// "v1.2.3" or "1.2.3" as three numbers. Anything missing counts as 0, so
+// "v1.2" is 1.2.0.
+std::array<int, 3> parse_version(const std::wstring& text) {
+    std::array<int, 3> parts{};
+    std::size_t at = 0;
+    if (at < text.size() && (text[at] == L'v' || text[at] == L'V')) {
+        ++at;
+    }
+    for (auto& part : parts) {
+        const std::size_t first = at;
+        while (at < text.size() && text[at] >= L'0' && text[at] <= L'9' && at - first < 6) {
+            part = part * 10 + (text[at] - L'0');
+            ++at;
+        }
+        if (at == first || at >= text.size() || text[at] != L'.') {
+            break;
+        }
+        ++at;
+    }
+    return parts;
+}
+
+// The newest release's tag from GitHub, or empty on any failure - offline, a
+// firewall, GitHub down - because none of those is worth more than a shrug at
+// startup. Drafts and pre-releases are never "latest", so they never prompt.
+std::wstring fetch_latest_release_tag() {
+    std::wstring tag;
+    const std::wstring agent = std::wstring(L"GenX/") + kGenxVersion;
+    HINTERNET session = WinHttpOpen(agent.c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                                    WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (session == nullptr) {
+        return tag;
+    }
+    // Short: nobody should wait on this, and it runs off the window's thread.
+    WinHttpSetTimeouts(session, 5000, 5000, 5000, 5000);
+    HINTERNET connection =
+        WinHttpConnect(session, L"api.github.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
+    HINTERNET request = connection == nullptr
+                            ? nullptr
+                            : WinHttpOpenRequest(connection, L"GET",
+                                                 L"/repos/GamesExObscura/GenX/releases/latest",
+                                                 nullptr, WINHTTP_NO_REFERER,
+                                                 WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+    DWORD status = 0;
+    DWORD status_size = sizeof(status);
+    if (request != nullptr &&
+        WinHttpSendRequest(request, L"Accept: application/vnd.github+json\r\n",
+                           static_cast<DWORD>(-1), WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+        WinHttpReceiveResponse(request, nullptr) &&
+        WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size,
+                            WINHTTP_NO_HEADER_INDEX) &&
+        status == 200) {
+        // The reply is a few kilobytes. The cap is only there so a broken
+        // proxy cannot feed this forever.
+        constexpr std::size_t kMaxReply = 1 << 20;
+        std::string body;
+        DWORD available = 0;
+        while (WinHttpQueryDataAvailable(request, &available) && available > 0 &&
+               body.size() + available <= kMaxReply) {
+            const std::size_t old_size = body.size();
+            body.resize(old_size + available);
+            DWORD read = 0;
+            if (!WinHttpReadData(request, body.data() + old_size, available, &read) || read == 0) {
+                body.resize(old_size);
+                break;
+            }
+            body.resize(old_size + read);
+        }
+        // One field is needed, so it is found by hand rather than by a JSON
+        // library. tag_name comes before the release notes in the reply, so
+        // the first match is the field and never text quoted in the notes.
+        const auto key = body.find("\"tag_name\"");
+        const auto open = key == std::string::npos ? key : body.find('"', key + 10);
+        const auto close = open == std::string::npos ? open : body.find('"', open + 1);
+        if (close != std::string::npos && close - open - 1 <= 32) {
+            const auto value = body.substr(open + 1, close - open - 1);
+            const bool plain = std::all_of(value.begin(), value.end(), [](char c) {
+                return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                       c == '.' || c == '-' || c == '_';
+            });
+            if (plain) {
+                tag = widen(value);
+            }
+        }
+    }
+    if (request != nullptr) {
+        WinHttpCloseHandle(request);
+    }
+    if (connection != nullptr) {
+        WinHttpCloseHandle(connection);
+    }
+    WinHttpCloseHandle(session);
+    return tag;
+}
+
+// Asks on a thread of its own, so a slow or absent network never holds up the
+// window, and posts the answer back to it.
+void start_update_check(RuntimeState& state, bool asked) {
+    if (state.update_check_running || state.window == nullptr) {
+        return;
+    }
+    state.update_check_running = true;
+    HWND window = state.window;
+    std::thread([window, asked] {
+        auto* result = new UpdateCheck{fetch_latest_release_tag(), asked};
+        if (!PostMessageW(window, WM_APP_UPDATE_CHECKED, 0, reinterpret_cast<LPARAM>(result))) {
+            delete result;  // the window closed while the request was out
+        }
+    }).detach();
+}
+
+void show_update_result(RuntimeState& state, const UpdateCheck& check) {
+    const std::wstring running = std::wstring(L"v") + kGenxVersion;
+    if (check.latest.empty()) {
+        if (check.asked) {
+            MessageBoxW(state.window,
+                        L"GenX couldn't reach GitHub to check for a new version. Check your "
+                        L"internet connection and try again.",
+                        L"GenX", MB_OK | MB_ICONWARNING);
+        }
+        return;
+    }
+    if (parse_version(check.latest) <= parse_version(kGenxVersion)) {
+        if (check.asked) {
+            MessageBoxW(state.window,
+                        (L"You have the latest version of GenX (" + running + L").").c_str(),
+                        L"GenX", MB_OK | MB_ICONINFORMATION);
+        }
+        return;
+    }
+    // The startup check never interrupts a game. One opened before the answer
+    // came back is left alone, and the next start asks again.
+    if (!check.asked && (state.rom_loaded || state.fullscreen)) {
+        return;
+    }
+    const std::wstring text = L"You have GenX " + running + L".\nGenX " + check.latest +
+                              L" is available.\n\nOpen the download page?";
+    if (MessageBoxW(state.window, text.c_str(), L"GenX - New version",
+                    MB_YESNO | MB_ICONINFORMATION) == IDYES) {
+        ShellExecuteW(state.window, L"open", kReleasesPage, nullptr, nullptr, SW_SHOWNORMAL);
+    }
+}
+
 LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
     auto* state = reinterpret_cast<RuntimeState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
 
@@ -11202,6 +11421,9 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
                 case IDM_FILE_OPEN_LOG_FOLDER:
                     ShellExecuteW(hwnd, L"open", log_directory().c_str(), nullptr, nullptr,
                                   SW_SHOWNORMAL);
+                    return 0;
+                case IDM_HELP_CHECK_UPDATES:
+                    start_update_check(*state, true);
                     return 0;
                 case IDM_TOOLS_MUTE_FM:
                 case IDM_TOOLS_MUTE_PSG:
@@ -11744,6 +11966,14 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             EndPaint(hwnd, &paint);
             return 0;
         }
+        case WM_APP_UPDATE_CHECKED: {
+            std::unique_ptr<UpdateCheck> check(reinterpret_cast<UpdateCheck*>(lparam));
+            if (state != nullptr && check != nullptr) {
+                state->update_check_running = false;
+                show_update_result(*state, *check);
+            }
+            return 0;
+        }
         case WM_DEVICECHANGE:
             // Windows broadcasts this to every top-level window when the
             // device tree changes, with no registration needed for the
@@ -11939,6 +12169,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     if (state.fullscreen) {
         state.fullscreen = false;
         set_fullscreen(state, true);
+    }
+    // Not when a game was named on the command line: that is a front end such
+    // as LaunchBox starting a game, and nothing should pop up over it.
+    if (state.check_for_updates && startup_rom.empty()) {
+        start_update_check(state, false);
     }
 
     timeBeginPeriod(1);

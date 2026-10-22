@@ -259,6 +259,9 @@ happened.
 
 Everything is in `%APPDATA%\GenX`. **File → Open GenX folder** takes you there.
 
+In portable mode, everything is in the `User` folder next to `genx.exe`
+instead. Portable mode is on whenever that folder exists.
+
 | Folder or file | What it holds |
 |---|---|
 | `saves\` | In-game battery saves (`.srm`, `.eep`) and Sega CD backup RAM (`.brm`, one per region) |

@@ -10,6 +10,38 @@
 IDI_APPICON  ICON    "../res/genx.ico"
 IDR_LOGO_PNG RCDATA  "../res/genx.png"
 
+// The version shown in the exe's Properties > Details, and read from there by
+// front ends such as LaunchBox. The numbers come from GENX_VERSION in
+// CMakeLists.txt, so there is one place to bump.
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION     GENX_VERSION_MAJOR, GENX_VERSION_MINOR, GENX_VERSION_PATCH, 0
+ PRODUCTVERSION  GENX_VERSION_MAJOR, GENX_VERSION_MINOR, GENX_VERSION_PATCH, 0
+ FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+ FILEFLAGS       0
+ FILEOS          VOS_NT_WINDOWS32
+ FILETYPE        VFT_APP
+ FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName",      "GamesExObscura"
+            VALUE "FileDescription",  "GenX Sega emulator"
+            VALUE "FileVersion",      GENX_VERSION
+            VALUE "InternalName",     "genx"
+            VALUE "LegalCopyright",   "Licensed under the GNU GPL, version 3"
+            VALUE "OriginalFilename", "genx.exe"
+            VALUE "ProductName",      "GenX"
+            VALUE "ProductVersion",   GENX_VERSION
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+
 // The controller pictures are optional (see CMakeLists.txt): CMake defines
 // GENX_HAVE_* for the ones present in res/, and the Input tab draws a plain
 // labelled outline for any that are not.

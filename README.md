@@ -107,6 +107,14 @@ stop the startup check, untick **Check for updates when GenX starts** in
 LaunchBox starts it with a game, and the check sends nothing about you or your
 games.
 
+## Command line
+
+- `genx.exe "path\to\game.zip"` starts a game straight away. That's all a
+  front end such as LaunchBox needs.
+- `genx.exe -v` (or `--version`) prints the version, such as `GenX 1.1.1`, and
+  exits without opening a window. The version is also in the exe's
+  **Properties → Details**.
+
 ## Default controls
 
 Everything below can be changed in **Configure → Input** and **Configure →

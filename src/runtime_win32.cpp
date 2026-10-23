@@ -11015,6 +11015,39 @@ constexpr wchar_t kReleasesPage[] = L"https://github.com/GamesExObscura/GenX/rel
 // Well clear of WM_APP + 1, which the binding capture already uses.
 constexpr UINT WM_APP_UPDATE_CHECKED = WM_APP + 20;
 
+// genx.exe -v or --version. Front ends such as LaunchBox run it to find out
+// which version is installed, so it must print one line and leave without a
+// window, a sound device or a single file touched.
+bool is_version_flag(const wchar_t* argument) {
+    return _wcsicmp(argument, L"-v") == 0 || _wcsicmp(argument, L"--version") == 0;
+}
+
+// GenX is a windowed program, so normally there is nowhere to print. A caller
+// that wants the answer connects a pipe or a file (which is what a .NET
+// front end's redirected output is), and that is used first. Failing that,
+// the line goes to the console GenX was started from, if there is one.
+void print_version() {
+    const std::string line = std::string("GenX ") + GENX_VERSION + "\r\n";
+    DWORD written = 0;
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (out != nullptr && out != INVALID_HANDLE_VALUE) {
+        const DWORD type = GetFileType(out);
+        if (type == FILE_TYPE_PIPE || type == FILE_TYPE_DISK) {
+            WriteFile(out, line.data(), static_cast<DWORD>(line.size()), &written, nullptr);
+            return;
+        }
+    }
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        HANDLE console = CreateFileW(L"CONOUT$", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                     nullptr, OPEN_EXISTING, 0, nullptr);
+        if (console != INVALID_HANDLE_VALUE) {
+            WriteFile(console, line.data(), static_cast<DWORD>(line.size()), &written, nullptr);
+            CloseHandle(console);
+        }
+        FreeConsole();
+    }
+}
+
 // What came back from GitHub, handed from the checking thread to the window.
 struct UpdateCheck {
     std::wstring latest;  // the newest release's tag, "v1.2.0"; empty if unknown
@@ -12034,6 +12067,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     std::filesystem::path startup_rom;
     if (argv != nullptr) {
+        // Before anything else, settings included: asking the version must
+        // not create the data folder or write a log.
+        if (argc >= 2 && is_version_flag(argv[1])) {
+            LocalFree(argv);
+            print_version();
+            return 0;
+        }
         if (argc >= 2) {
             startup_rom = argv[1];
         }

@@ -99,9 +99,18 @@ target_link_libraries(genx PRIVATE mercury gdiplus dwmapi comdlg32 msimg32 ole32
 # the newest release on GitHub. Bump it with each release. It can be overridden
 # when configuring (-DGENX_VERSION=0.9.0) to test the "new version" message.
 if(NOT GENX_VERSION)
-    set(GENX_VERSION 1.1.0)
+    set(GENX_VERSION 1.1.1)
 endif()
-target_compile_definitions(genx PRIVATE GENX_VERSION="${GENX_VERSION}")
+# The three numbers also go into the exe's file properties (VERSIONINFO in
+# runtime_win32.rc), which is where Windows and front ends read a version
+# without running the program.
+if(NOT GENX_VERSION MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)$")
+    message(FATAL_ERROR "GENX_VERSION must look like 1.2.3, not \"${GENX_VERSION}\"")
+endif()
+target_compile_definitions(genx PRIVATE GENX_VERSION="${GENX_VERSION}"
+                                        GENX_VERSION_MAJOR=${CMAKE_MATCH_1}
+                                        GENX_VERSION_MINOR=${CMAKE_MATCH_2}
+                                        GENX_VERSION_PATCH=${CMAKE_MATCH_3})
 
 # The controller pictures in res/ are optional. A tree without them - the
 # published source leaves out pictures whose origin is not known - still

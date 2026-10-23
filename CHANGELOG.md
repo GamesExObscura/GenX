@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.1.1 (2026-10-22)
+
+### Added
+
+- **Version for front ends.** `genx.exe -v` (or `--version`) prints the
+  version, such as `GenX 1.1.1`, and exits without opening a window. The
+  version is also in the exe's **Properties → Details**. Front ends such as
+  LaunchBox can use either one to see which version is installed.
+
 ## v1.1.0 (2026-10-22)
 
 ### Added

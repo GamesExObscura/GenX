@@ -111,7 +111,7 @@ games.
 
 - `genx.exe "path\to\game.zip"` starts a game straight away. That's all a
   front end such as LaunchBox needs.
-- `genx.exe -v` (or `--version`) prints the version, such as `GenX 1.1.1`, and
+- `genx.exe -v` (or `--version`) prints the version, such as `GenX 1.1.2`, and
   exits without opening a window. The version is also in the exe's
   **Properties → Details**.
 

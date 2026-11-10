@@ -48,6 +48,7 @@ using std::max;
 
 #include "mercury/core/crosshair.hpp"
 #include "mercury/core/game_genie.hpp"
+#include "mercury/core/path_text.hpp"
 #include "mercury/gamegear/game_gear.hpp"
 #include "mercury/gamegear/gear_link_session.hpp"
 #include "mercury/genesis/genesis.hpp"
@@ -1894,7 +1895,7 @@ bool shared_pad_game(const RuntimeState& state) {
     // The name is the only thing left for a release that has not been measured
     // here - Micro Machines 2 among them. Loose on purpose: it is a match for
     // a two-player convenience, not for anything that could corrupt a save.
-    auto name = state.rom_path.filename().string();
+    auto name = mercury::core::path_text(state.rom_path.filename());
     std::transform(name.begin(), name.end(), name.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return name.find("micro machines") != std::string::npos ||
@@ -2841,7 +2842,7 @@ void write_diagnostic_log(RuntimeState& state) {
 
     out << "GenX diagnostic log\n";
     out << "===================\n\n";
-    out << "cartridge : " << state.rom_path.filename().string() << "\n";
+    out << "cartridge : " << mercury::core::path_text(state.rom_path.filename()) << "\n";
     out << "machine   : " << (state.machine == Machine::genesis ? "Mega Drive / Genesis"
                                                                 : "Game Gear / Master System")
         << "\n";
@@ -3243,7 +3244,7 @@ void dump_memory(RuntimeState& state) {
 
     out << "GenX memory dump\n";
     out << "================\n";
-    out << "cartridge : " << state.rom_path.filename().string() << "\n";
+    out << "cartridge : " << mercury::core::path_text(state.rom_path.filename()) << "\n";
     out << "\nRuns of sixteen zero bytes are collapsed to a single line.\n";
     dump("VRAM", state.genesis.vdp().vram());
     dump("work RAM", state.genesis.work_ram());
@@ -5700,7 +5701,7 @@ bool load_rom_from_path(RuntimeState& state, const std::filesystem::path& path,
     if (problem != nullptr) {
         *problem = LoadProblem::other;
     }
-    auto extension = path.extension().string();
+    auto extension = mercury::core::path_text(path.extension());
     std::transform(extension.begin(), extension.end(), extension.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     // .bin and .zip are ambiguous - either machine's cartridge can arrive under
@@ -6344,14 +6345,22 @@ void update_segacd_bios_status(HWND page) {
                         L"Mega Drive header, subfolders included, two deep.");
         return;
     }
-    // scan_bios_folder returns them in the order the loader prefers, so the
-    // first of a region is the one that region's discs will get.
+    // scan_bios_folder returns them in the order the loader prefers, and this
+    // picks exactly as load_bios_for does: the discs a BIOS boots (its header
+    // region) must match, and one whose console is that region too comes
+    // first - so Japan shows a Japanese BIOS ahead of the Southeast Asian one.
     std::wstring text;
     int missing = 0;
     const auto line = [&](char region, const wchar_t* name) {
         const mercury::segacd::BiosImage* pick = nullptr;
         for (const auto& image : images) {
-            if (image.region == region) {
+            if (image.region == region && image.console == region) {
+                pick = &image;
+                break;
+            }
+        }
+        for (const auto& image : images) {
+            if (pick == nullptr && image.region == region) {
                 pick = &image;
                 break;
             }

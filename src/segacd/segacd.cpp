@@ -1,5 +1,7 @@
 #include "mercury/segacd/segacd.hpp"
 
+#include "mercury/segacd/bios.hpp"
+
 #include <algorithm>
 #include <bit>
 #include <cstdio>
@@ -94,6 +96,7 @@ bool SegaCd::load_bios(const std::vector<std::uint8_t>& image, std::string& erro
     }
     bios_ = image;
     bios_loaded_ = true;
+    console_region_ = bios_console_region(bios_);
     return true;
 }
 

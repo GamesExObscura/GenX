@@ -1,5 +1,7 @@
 #include "mercury/core/zip_archive.hpp"
 
+#include "mercury/core/path_text.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -500,12 +502,12 @@ bool read_rom_file(const std::filesystem::path& path, std::vector<std::uint8_t>&
     }
     std::ifstream in(path, std::ios::binary);
     if (!in) {
-        error = "cannot open " + path.string();
+        error = "cannot open " + path_text(path);
         return false;
     }
     out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
     if (out.empty()) {
-        error = path.string() + " is empty";
+        error = path_text(path) + " is empty";
         return false;
     }
     if (!looks_like_zip(out)) {
@@ -514,7 +516,7 @@ bool read_rom_file(const std::filesystem::path& path, std::vector<std::uint8_t>&
     std::vector<std::uint8_t> inner;
     std::string name;
     if (!extract_rom_from_zip(out, inner, name, error)) {
-        error = path.filename().string() + ": " + error;
+        error = path_text(path.filename()) + ": " + error;
         return false;
     }
     out = std::move(inner);

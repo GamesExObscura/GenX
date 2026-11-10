@@ -57,6 +57,10 @@ class SegaCd {
     // RAM belongs to the console rather than to a disc, so the host keeps one
     // file per console region rather than one per game.
     [[nodiscard]] char bios_region() const noexcept;
+    // The console the BIOS belongs to - 'U', 'E', 'J', 'A' (Southeast Asia,
+    // PAL) or 0 - which is the console the machine has to be. See
+    // bios_console_region.
+    [[nodiscard]] char console_region() const noexcept { return console_region_; }
 
     // A disc in the tray, or none - the BIOS with no disc is the console's own
     // CD player and memory manager screen, which is a perfectly good thing to
@@ -386,6 +390,7 @@ class SegaCd {
     std::vector<std::uint8_t> word_ram_ = std::vector<std::uint8_t>(kWordRamSize, 0);
     std::vector<std::uint8_t> backup_ram_ = std::vector<std::uint8_t>(kBackupRamSize, 0);
     bool bios_loaded_ = false;
+    char console_region_ = 0;
     bool backup_ram_dirty_ = false;
 
     // The gate array's registers, 256 words, indexed by (byte address / 2).

@@ -19,6 +19,7 @@ enable_testing()
 
 add_library(mercury
     src/core/module_status.cpp
+    src/core/path_text.cpp
     src/core/rom_image.cpp
     src/core/zip_archive.cpp
     src/core/z80_cpu.cpp
@@ -99,7 +100,7 @@ target_link_libraries(genx PRIVATE mercury gdiplus dwmapi comdlg32 msimg32 ole32
 # the newest release on GitHub. Bump it with each release. It can be overridden
 # when configuring (-DGENX_VERSION=0.9.0) to test the "new version" message.
 if(NOT GENX_VERSION)
-    set(GENX_VERSION 1.1.1)
+    set(GENX_VERSION 1.1.2)
 endif()
 # The three numbers also go into the exe's file properties (VERSIONINFO in
 # runtime_win32.rc), which is where Windows and front ends read a version

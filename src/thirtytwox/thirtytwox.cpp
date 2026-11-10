@@ -8,6 +8,8 @@
 #include <sstream>
 #include <system_error>
 
+#include "mercury/core/path_text.hpp"
+
 namespace mercury::thirtytwox {
 
 namespace {
@@ -86,7 +88,7 @@ void poke32(std::array<std::uint8_t, 0x100>& page, std::size_t at, std::uint32_t
 // page would boot garbage. Now that the game's own folder is searched, those
 // are skipped by name.
 bool known_non_firmware(const std::filesystem::path& path) {
-    auto extension = path.extension().string();
+    auto extension = core::path_text(path.extension());
     for (auto& c : extension) {
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     }

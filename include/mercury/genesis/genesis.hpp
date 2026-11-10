@@ -447,6 +447,11 @@ private:
     std::uint32_t z80_bank_bits_ = 0;
 
     bool pal_ = false;
+    // A Japanese-type console: bit 7 of the version register clear. Only a
+    // Sega CD sets it, from its BIOS (load_cd) - Japanese and Southeast Asian
+    // BIOSes refuse to start on anything else. Not in save states: it follows
+    // from the BIOS that was loaded, which a state is always restored onto.
+    bool domestic_ = false;
     // The Z80 runs at 7/15 of the 68000's rate; the remainder is carried so the
     // ratio stays exact over a frame instead of drifting.
     std::int64_t z80_cycle_debt_ = 0;

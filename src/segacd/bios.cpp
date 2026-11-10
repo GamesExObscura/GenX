@@ -3,10 +3,15 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <string_view>
+
+#include "mercury/core/path_text.hpp"
 
 namespace mercury::segacd {
 
 namespace {
+
+using core::path_text;
 
 constexpr std::uintmax_t kBiosSize = 0x20000;
 
@@ -18,7 +23,7 @@ std::string lower(std::string text) {
 
 // The region a file name admits to, if any.
 char region_from_name(const std::filesystem::path& path) {
-    const auto name = lower(path.filename().string());
+    const auto name = lower(path_text(path.filename()));
     const auto has = [&name](const char* word) { return name.find(word) != std::string::npos; };
     if (has("(usa") || has("(us)") || has("us_") || has("_us") || has("sega cd") || has("segacd") ||
         has("usa")) {
@@ -33,7 +38,31 @@ char region_from_name(const std::filesystem::path& path) {
     return 0;
 }
 
+// The first of U / E / J in the header's region field. A BIOS lists only its
+// own.
+char header_region(const std::vector<std::uint8_t>& image) {
+    for (std::size_t i = 0; i < 3 && 0x1F0 + i < image.size(); ++i) {
+        const char c = static_cast<char>(std::toupper(image[0x1F0 + i]));
+        if (c == 'U' || c == 'E' || c == 'J') {
+            return c;
+        }
+    }
+    return 0;
+}
+
 }  // namespace
+
+char bios_console_region(const std::vector<std::uint8_t>& image) {
+    // Each BIOS carries exactly one of these, the text of its own region
+    // error. Southeast Asia is tested first: its line is a different sentence
+    // from Japan's ("...FOR EXCLUSIVE USE IN JAPAN AND / SOUTHEAST ASIA.").
+    const std::string_view text(reinterpret_cast<const char*>(image.data()), image.size());
+    if (text.find("FOR EXCLUSIVE USE IN SOUTHEAST ASIA") != std::string_view::npos) return 'A';
+    if (text.find("FOR EXCLUSIVE USE IN JAPAN") != std::string_view::npos) return 'J';
+    if (text.find("FOR USE IN NTSC REGIONS OTHER THAN") != std::string_view::npos) return 'U';
+    if (text.find("PAL/SECAM-COMPATIBLE") != std::string_view::npos) return 'E';
+    return header_region(image);
+}
 
 std::vector<BiosImage> scan_bios_folder(const std::filesystem::path& folder) {
     std::vector<BiosImage> found;
@@ -58,32 +87,31 @@ std::vector<BiosImage> scan_bios_folder(const std::filesystem::path& folder) {
         if (!entry.is_regular_file(ignored) || entry.file_size(ignored) != kBiosSize) {
             continue;
         }
+        // The whole image, not just the header: which console it belongs to is
+        // read from its region message (bios_console_region).
         std::ifstream in(entry.path(), std::ios::binary);
-        std::vector<char> head(0x200, 0);
-        in.read(head.data(), static_cast<std::streamsize>(head.size()));
+        std::vector<std::uint8_t> bytes(kBiosSize, 0);
+        in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
         if (!in) {
             continue;
         }
         // A Sega CD BIOS carries a Mega Drive header. Its system name says
         // "SEGA", which also rules out a 128KB file that is something else.
-        const std::string system(head.data() + 0x100, 16);
+        const std::string system(reinterpret_cast<const char*>(bytes.data()) + 0x100, 16);
         if (system.find("SEGA") == std::string::npos) {
             continue;
         }
         BiosImage image;
         image.path = entry.path();
-        // The region field: the first of U / E / J that it lists. A BIOS lists
-        // only its own.
-        for (int i = 0; i < 3 && image.region == 0; ++i) {
-            const char c = static_cast<char>(std::toupper(static_cast<unsigned char>(head[0x1F0 + i])));
-            if (c == 'U' || c == 'E' || c == 'J') {
-                image.region = c;
-            }
-        }
+        image.region = header_region(bytes);
         if (image.region == 0) {
             image.region = region_from_name(entry.path());
         }
-        std::string title(head.data() + 0x120, 0x30);
+        image.console = bios_console_region(bytes);
+        if (image.console == 0) {
+            image.console = image.region;
+        }
+        std::string title(reinterpret_cast<const char*>(bytes.data()) + 0x120, 0x30);
         while (!title.empty() && (title.back() == ' ' || title.back() == '\0')) title.pop_back();
         image.description = title;
         found.push_back(image);
@@ -96,7 +124,7 @@ std::vector<BiosImage> scan_bios_folder(const std::filesystem::path& folder) {
     // "Model 2 v2.00" image in the user's pack never starts its sub CPU).
     // Then a file in the folder itself before one in a subfolder, then path.
     const auto standard = [](const std::filesystem::path& path) {
-        const auto name = lower(path.filename().string());
+        const auto name = lower(path_text(path.filename()));
         return name.rfind("bios_cd_", 0) == 0 || name.rfind("us_scd", 0) == 0 ||
                name.rfind("eu_mcd", 0) == 0 || name.rfind("jp_mcd", 0) == 0;
     };
@@ -138,7 +166,7 @@ bool load_bios_for(char region, const std::filesystem::path& configured,
     for (int level = 0; level < 4 && !here.empty(); ++level) {
         for (const auto& entry : std::filesystem::directory_iterator(here, ignored)) {
             if (entry.is_directory(ignored) &&
-                lower(entry.path().filename().string()).find("bios") != std::string::npos) {
+                lower(path_text(entry.path().filename())).find("bios") != std::string::npos) {
                 folders.push_back(entry.path());
             }
         }
@@ -154,26 +182,49 @@ bool load_bios_for(char region, const std::filesystem::path& configured,
         }
         // The disc's own region first; with no disc (or no match) any image
         // will do for the BIOS's own menu, preferring USA.
+        //
+        // A BIOS carries two facts. The header's region letter is the discs
+        // it boots: the JVC X'Eye's says U, and it plays US discs and drops a
+        // Japanese one into its CD player. Its region message is the console
+        // it must run on (bios_console_region), which GenX then becomes. So
+        // the disc is matched against the header, preferring an image whose
+        // console is the same region - a real Japanese unit over the
+        // Southeast Asian PAL one, which also says J and also boots Japanese
+        // discs, but at 50Hz. Picking that one first was the bug: PicoDrive's
+        // standard jp_mcd1_9112.bin name is the Asian BIOS, and standard
+        // names are tried first.
         const BiosImage* pick = nullptr;
         for (const auto& candidate : images) {
-            if (region != 0 && candidate.region == region) { pick = &candidate; break; }
+            if (region != 0 && candidate.region == region && candidate.console == region) {
+                pick = &candidate;
+                break;
+            }
+        }
+        for (const auto& candidate : images) {
+            if (pick == nullptr && region != 0 && candidate.region == region) {
+                pick = &candidate;
+                break;
+            }
         }
         if (pick == nullptr && region != 0) {
-            error = std::string("found a Sega CD BIOS in ") + folder.string() +
+            error = std::string("found a Sega CD BIOS in ") + path_text(folder) +
                     " but none for this disc's region (" + region +
                     ") - a disc only boots on its own region's BIOS";
             continue;
         }
         if (pick == nullptr) {
             for (const auto& candidate : images) {
-                if (candidate.region == 'U') { pick = &candidate; break; }
+                if (candidate.region == 'U' && candidate.console == 'U') { pick = &candidate; break; }
+            }
+            for (const auto& candidate : images) {
+                if (pick == nullptr && candidate.region == 'U') { pick = &candidate; break; }
             }
             if (pick == nullptr) pick = &images.front();
         }
         std::ifstream in(pick->path, std::ios::binary);
         image.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
         if (image.size() != kBiosSize) {
-            error = "could not read " + pick->path.string();
+            error = "could not read " + path_text(pick->path);
             continue;
         }
         if (chosen != nullptr) *chosen = pick->path;

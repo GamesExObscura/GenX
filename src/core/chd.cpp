@@ -6,6 +6,7 @@
 
 #include "mercury/core/flac.hpp"
 #include "mercury/core/lzma.hpp"
+#include "mercury/core/path_text.hpp"
 #include "mercury/core/zip_archive.hpp"
 
 namespace mercury::core {
@@ -299,7 +300,7 @@ bool Chd::open(const std::filesystem::path& path, std::string& error) {
     path_ = path;
     file_.open(path, std::ios::binary);
     if (!file_) {
-        error = "cannot open " + path.string();
+        error = "cannot open " + path_text(path);
         return false;
     }
     if (!read_header(error) || !read_metadata(error) || !read_map(error)) {

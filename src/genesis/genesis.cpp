@@ -298,9 +298,19 @@ Genesis::LoadResult Genesis::load_cd(const std::filesystem::path& disc,
     // (it skips the cartridge initial-data-load when no cartridge is in).
     thirtytwox_->attach_rom(nullptr);
     thirtytwox_->attach_bios(disc);
-    // The disc's region decides the console's timing, as a cartridge
-    // header's does.
-    set_pal(segacd_->disc().loaded() && segacd_->disc().region() == 'E');
+    // The console is whatever the BIOS belongs to: a Mega-CD and its BIOS are
+    // one unit, and the BIOS checks the version register at power-on and
+    // refuses to start on any other console. Telling a Japanese BIOS it was on
+    // a US machine is what showed "ERROR! THIS IS AN NTSC-COMPATIBLE MEGA-CD
+    // FOR EXCLUSIVE USE IN JAPAN..." - and the Southeast Asian one is a
+    // Japanese-type console that runs at 50Hz. A BIOS that does not say
+    // (no region message, no header letter) falls back to the disc's region.
+    char console = segacd_->console_region();
+    if (console == 0 && segacd_->disc().loaded()) {
+        console = segacd_->disc().region();
+    }
+    domestic_ = console == 'J' || console == 'A';
+    set_pal(console == 'E' || console == 'A');
     reset();
     std::ostringstream message;
     message << segacd_->bios_description();
@@ -321,8 +331,10 @@ Genesis::LoadResult Genesis::load_rom(const std::filesystem::path& path) {
         result.message = error;
         return result;
     }
-    // A cartridge takes the CD unit out of the picture again.
+    // A cartridge takes the CD unit out of the picture again, and with it
+    // the Sega CD's console region: cartridges run on an overseas console.
     cd_mode_ = false;
+    domestic_ = false;
     // Region byte drives the machine's timing. 'E' and 'A' are the PAL markers;
     // everything else, including the common "JUE", runs at 60Hz here.
     const auto& region = cartridge_.header().region;
@@ -979,10 +991,12 @@ std::uint8_t Genesis::read_io(std::uint32_t address) noexcept {
     std::uint8_t value = 0x00;
     switch (reg) {
         case 0x01:
-            // Version register: overseas + NTSC/PAL + "no Mega CD attached" +
-            // hardware revision zero. Region code here has to agree with the
-            // timing actually being run, or games refuse to start.
-            value = static_cast<std::uint8_t>(0x80 | (pal_ ? 0x40 : 0x00) | 0x20);
+            // Version register: overseas/domestic + NTSC/PAL + "no Mega CD
+            // attached" + hardware revision zero. Region code here has to agree
+            // with the timing actually being run, or games refuse to start.
+            // Domestic (bit 7 clear) only for a Japanese or Southeast Asian
+            // Sega CD BIOS - see load_cd.
+            value = static_cast<std::uint8_t>((domestic_ ? 0x00 : 0x80) | (pal_ ? 0x40 : 0x00) | 0x20);
             break;
         case 0x03: value = port1_.read_data(); break;
         case 0x05: value = port2_.read_data(); break;
@@ -1652,6 +1666,7 @@ std::string Genesis::describe() const {
         << (cartridge_.loaded() ? cartridge_.describe() : std::string("No cartridge loaded"))
         << "\n\n" << vdp_.describe()
         << "\n\nRegion    : " << (pal_ ? "PAL 50Hz" : "NTSC 60Hz")
+        << (domestic_ ? ", Japanese-type console" : "")
         << "\nZ80       : " << (z80_reset_asserted_ ? "held in reset"
                                                     : (z80_bus_requested_ ? "bus granted to 68000" : "running"))
         << ", bank " << std::hex << (z80_bank_ << 15) << std::dec

@@ -5,6 +5,8 @@
 // so the tests exercise the gate array from both sides, the interrupts, the
 // clocks and the drive, the way software actually reaches them.
 
+#include "mercury/core/path_text.hpp"
+#include "mercury/segacd/bios.hpp"
 #include "mercury/segacd/disc.hpp"
 #include "mercury/segacd/segacd.hpp"
 
@@ -516,10 +518,102 @@ void test_not_a_sega_cd() {
     check(!error.empty(), "with a reason");
 }
 
+// WHICH CONSOLE A BIOS BELONGS TO.
+//
+// Read from the region message the BIOS shows when its own power-on check
+// fails, since that is the check the machine has to pass. The header letter
+// is only the fallback - real images get it wrong (the Asian PAL BIOS says J,
+// the JVC X'Eye says U and wants Japan).
+void test_bios_console_region() {
+    std::printf("a BIOS's console comes from its own region message\n");
+    const auto image = [](const char* message, const char* header) {
+        std::vector<std::uint8_t> bytes(SegaCd::kBiosSize, 0);
+        std::memcpy(bytes.data() + 0x100, "SEGA MEGA DRIVE ", 16);
+        std::memcpy(bytes.data() + 0x1F0, header, std::strlen(header));
+        if (message != nullptr) {
+            std::memcpy(bytes.data() + 0x800, message, std::strlen(message));
+        }
+        return bytes;
+    };
+    using mercury::segacd::bios_console_region;
+    check_eq(bios_console_region(image("THIS IS A PAL-COMPATIBLE MEGA CD\x01"
+                                       "FOR EXCLUSIVE USE IN SOUTHEAST ASIA.", "J")), 'A',
+             "the Southeast Asian PAL BIOS, though its header says J");
+    check_eq(bios_console_region(image("THIS IS AN NTSC-COMPATIBLE MEGA-CD\x01"
+                                       "FOR EXCLUSIVE USE IN JAPAN AND\x01SOUTHEAST ASIA.", "U")), 'J',
+             "a Japanese BIOS, though its header says U (the JVC X'Eye)");
+    check_eq(bios_console_region(image("THIS IS AN NTSC-COMPATIBLE SEGA-CD\x01"
+                                       "FOR USE IN NTSC REGIONS OTHER THAN\x01JAPAN AND SOUTHEAST ASIA.", "J")), 'U',
+             "a US BIOS, though its header says J (the US LaserActive)");
+    check_eq(bios_console_region(image("THIS IS A PAL/SECAM-COMPATIBLE\x01", "E")), 'E', "a European BIOS");
+    check_eq(bios_console_region(image(nullptr, "J  ")), 'J', "no message: the header's letter");
+    check_eq(bios_console_region(image(nullptr, "f  ")), 0, "neither: unknown");
+
+    // And the machine follows it: a Japanese BIOS makes a Japanese console.
+    SegaCd cd;
+    std::string error;
+    check(cd.load_bios(image("FOR EXCLUSIVE USE IN JAPAN AND", "J"), error), "a BIOS loads");
+    check_eq(static_cast<std::uint32_t>(cd.console_region()), 'J', "and the unit reports its console");
+}
+
+// NAMES WINDOWS' OLD CODE PAGE CANNOT HOLD MUST NOT ABORT GENX.
+//
+// The BIOS search lists the folders around a disc by name, and the cue sheet's
+// nearest-file match lists the files beside it. Both converted every name with
+// path::string(), which throws for a separate combining accent - "Poke" +
+// U+0301 + "mon", a real folder in a user's Downloads - and the uncaught
+// exception closed GenX the moment any disc near it was opened.
+void test_odd_names_beside_a_disc() {
+    std::printf("odd file and folder names beside a disc do not abort anything\n");
+    const auto dir = scratch_dir("genx_odd_names");
+    const std::filesystem::path odd_folder = dir / std::filesystem::path(u8"Pokémon BIOS");
+    const std::filesystem::path odd_file = dir / std::filesystem::path(u8"Pokémon (Track 01).bin");
+    std::error_code ignored;
+    std::filesystem::create_directories(odd_folder, ignored);
+    {
+        std::ofstream(odd_folder / std::filesystem::path(u8"Pokémon.bin")) << "not a BIOS";
+        std::ofstream(odd_file) << "not a track";
+    }
+    write_data_track(dir / "game (Track 01).bin", 200, 2352);
+
+    check(mercury::core::path_text(odd_folder.filename()).find("BIOS") != std::string::npos,
+          "the name comes back as text");
+
+    // The BIOS search walks this folder (its name says BIOS) and the one
+    // around it. No BIOS is there, so it fails - with a reason, not a crash.
+    bool threw = false;
+    std::vector<std::uint8_t> image;
+    std::string error;
+    try {
+        (void)mercury::segacd::load_bios_for('U', {}, dir / "game.cue", image, error);
+    } catch (...) {
+        threw = true;
+    }
+    check(!threw, "the BIOS search survives the folder name");
+    check(!error.empty(), "and says why it found nothing");
+
+    // A cue naming a file that is not there sends Disc to look for the
+    // nearest match, which reads every name in the folder.
+    {
+        std::ofstream cue(dir / "game.cue");
+        cue << "FILE \"game (Track 1).bin\" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n";
+    }
+    threw = false;
+    mercury::segacd::Disc disc;
+    try {
+        (void)disc.open(dir / "game.cue", error);
+    } catch (...) {
+        threw = true;
+    }
+    check(!threw, "the cue's nearest-file match survives the file name");
+}
+
 }  // namespace
 
 int main() {
     std::printf("Sega CD tests\n=============\n\n");
+    test_odd_names_beside_a_disc();
+    test_bios_console_region();
     test_power_on_state();
     test_bios_and_hint_vector();
     test_program_ram_window();

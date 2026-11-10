@@ -1,5 +1,6 @@
 ﻿#include "mercury/gamegear/game_gear.hpp"
 
+#include "mercury/core/path_text.hpp"
 #include "mercury/core/save_state.hpp"
 
 #include <algorithm>
@@ -33,8 +34,8 @@ mercury::core::RomLoadResult GameGear::load_rom(const std::filesystem::path& pat
     // For a zipped cartridge the .zip on the outside says nothing; the name of
     // the file inside it is what carries the .sms or .gg.
     auto extension = result.image.archive_entry.empty()
-                         ? path.extension().string()
-                         : std::filesystem::path(result.image.archive_entry).extension().string();
+                         ? core::path_text(path.extension())
+                         : core::path_text(std::filesystem::path(result.image.archive_entry).extension());
     std::transform(extension.begin(), extension.end(), extension.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     vdp_.set_display_mode(extension == ".sms" ? Vdp::DisplayMode::master_system

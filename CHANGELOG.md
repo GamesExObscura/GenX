@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.1.2 (2026-11-10)
+
+### Fixed
+
+- **Crash when opening a Sega CD disc.** GenX closed without a message when
+  a disc sat near a file or folder whose name has certain characters, such as
+  an accent stored as a separate mark (some "Pokémon" names) or Japanese text.
+  Names of any kind now work, everywhere GenX reads them.
+- **Japanese and Southeast Asian Sega CD BIOSes now start.** GenX always
+  presented itself as a US or European console, so these BIOSes stopped on an
+  error such as "This is a PAL-compatible Mega CD for exclusive use in
+  Southeast Asia". GenX now works out which console a BIOS belongs to and
+  becomes that console, including the Southeast Asian model's 50 Hz.
+- **Japanese discs get a Japanese BIOS.** When a BIOS folder holds both, a
+  Japanese disc now gets a Japanese BIOS rather than the Southeast Asian one.
+  Some BIOS packs name the Southeast Asian BIOS `jp_mcd1_9112.bin`, which GenX
+  used to pick first.
+- The **BIOS** tab in **Configure** now shows the BIOS each region's discs will
+  really use.
+
 ## v1.1.1 (2026-10-22)
 
 ### Added

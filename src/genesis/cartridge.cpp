@@ -1,5 +1,6 @@
 #include "mercury/genesis/cartridge.hpp"
 
+#include "mercury/core/path_text.hpp"
 #include "mercury/core/zip_archive.hpp"
 
 #include <algorithm>
@@ -43,7 +44,7 @@ std::uint32_t read_be32(const std::vector<std::uint8_t>& rom, std::size_t offset
 // reliable signal: a linear ROM is a power-of-two multiple of 512, an .smd is
 // 512 + N*16384.
 bool looks_like_smd(const std::vector<std::uint8_t>& raw, const std::filesystem::path& path) {
-    auto extension = path.extension().string();
+    auto extension = core::path_text(path.extension());
     std::transform(extension.begin(), extension.end(), extension.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     if (raw.size() <= kSmdHeaderBytes) {

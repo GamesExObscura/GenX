@@ -5,9 +5,13 @@
 #include <cstring>
 #include <sstream>
 
+#include "mercury/core/path_text.hpp"
+
 namespace mercury::segacd {
 
 namespace {
+
+using core::path_text;
 
 std::string lower(std::string text) {
     std::transform(text.begin(), text.end(), text.begin(),
@@ -40,7 +44,7 @@ constexpr std::uint8_t kSync[12] = {0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
 }  // namespace
 
 bool Disc::is_disc_image(const std::filesystem::path& path) {
-    const auto extension = lower(path.extension().string());
+    const auto extension = lower(path_text(path.extension()));
     if (extension == ".cue" || extension == ".iso" || extension == ".chd") {
         return true;
     }
@@ -164,8 +168,8 @@ std::filesystem::path Disc::nearest_file(const std::filesystem::path& wanted) co
         }
         return out;
     };
-    const auto extension = lower(wanted.extension().string());
-    const auto asked = words(wanted.stem().string());
+    const auto extension = lower(path_text(wanted.extension()));
+    const auto asked = words(path_text(wanted.stem()));
     if (asked.empty()) {
         return {};
     }
@@ -175,14 +179,14 @@ std::filesystem::path Disc::nearest_file(const std::filesystem::path& wanted) co
     bool tied = false;
     for (const auto& entry : std::filesystem::directory_iterator(folder, ignored)) {
         if (!entry.is_regular_file(ignored) ||
-            lower(entry.path().extension().string()) != extension) {
+            lower(path_text(entry.path().extension())) != extension) {
             continue;
         }
         // Already spoken for by an earlier FILE line.
         if (std::find(file_paths_.begin(), file_paths_.end(), entry.path()) != file_paths_.end()) {
             continue;
         }
-        auto have = words(entry.path().stem().string());
+        auto have = words(path_text(entry.path().stem()));
         std::size_t score = 0;
         for (const auto& word : asked) {
             const auto at = std::find(have.begin(), have.end(), word);
@@ -220,7 +224,7 @@ bool Disc::read_bytes(int file, std::uint64_t offset, void* out, std::size_t siz
 
 bool Disc::open(const std::filesystem::path& image, std::string& error) {
     close();
-    const auto extension = lower(image.extension().string());
+    const auto extension = lower(path_text(image.extension()));
     bool ok = false;
     if (extension == ".cue") {
         ok = open_cue(image, error);
@@ -255,7 +259,7 @@ bool Disc::open(const std::filesystem::path& image, std::string& error) {
 bool Disc::open_single(const std::filesystem::path& image, std::string& error) {
     const int file = add_file(image);
     if (file < 0) {
-        error = "cannot open " + image.string();
+        error = "cannot open " + path_text(image);
         return false;
     }
     std::uint8_t first[16] = {};
@@ -290,7 +294,7 @@ bool Disc::open_single(const std::filesystem::path& image, std::string& error) {
 bool Disc::open_cue(const std::filesystem::path& cue, std::string& error) {
     std::ifstream in(cue);
     if (!in) {
-        error = "cannot open " + cue.string();
+        error = "cannot open " + path_text(cue);
         return false;
     }
 
@@ -359,7 +363,7 @@ bool Disc::open_cue(const std::filesystem::path& cue, std::string& error) {
                 }
             }
             if (file < 0) {
-                error = "the cue sheet names a file that cannot be opened: " + path.string();
+                error = "the cue sheet names a file that cannot be opened: " + path_text(path);
                 return false;
             }
             file_is_wave = kind == "wave";
@@ -372,7 +376,7 @@ bool Disc::open_cue(const std::filesystem::path& cue, std::string& error) {
                 char riff[12] = {};
                 if (!read_bytes(file, 0, riff, sizeof(riff)) || std::memcmp(riff, "RIFF", 4) != 0 ||
                     std::memcmp(riff + 8, "WAVE", 4) != 0) {
-                    error = "not a WAVE file: " + path.string();
+                    error = "not a WAVE file: " + path_text(path);
                     return false;
                 }
                 std::uint64_t at = 12;
@@ -390,7 +394,7 @@ bool Disc::open_cue(const std::filesystem::path& cue, std::string& error) {
                     at += 8 + length + (length & 1);
                 }
                 if (file_data_offset == 0) {
-                    error = "WAVE file has no data chunk: " + path.string();
+                    error = "WAVE file has no data chunk: " + path_text(path);
                     return false;
                 }
             }

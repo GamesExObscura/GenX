@@ -55,6 +55,7 @@ using std::max;
 #include "mercury/net/genesis_seats.hpp"
 #include "mercury/net/netplay.hpp"
 #include "mercury/segacd/bios.hpp"
+#include "platform/win32_cd_drive.hpp"
 #include "runtime_resources.hpp"
 
 #pragma comment(lib, "winmm.lib")
@@ -544,6 +545,10 @@ struct RuntimeState {
     std::chrono::steady_clock::time_point next_frame_deadline{};
     HMENU menu = nullptr;
     HMENU recent_menu = nullptr;
+    // The optical drives, listed when each menu opens: Open ROM > Sega CD
+    // from drive, and Sega CD > Swap to disc in drive.
+    HMENU drive_menu = nullptr;
+    HMENU swap_drive_menu = nullptr;
     HMENU load_state_menu = nullptr;
     HMENU save_state_menu = nullptr;
     HMENU delete_state_menu = nullptr;
@@ -2371,11 +2376,16 @@ void stop_recording(RuntimeState& state) {
     set_status(state, L"saved " + state.recording_path.filename().wstring());
 }
 
+// What the loaded game is called on disk and on screen - its file's name, or
+// a drive disc's title. Defined with the drive menus.
+std::wstring game_name(const RuntimeState& state);
+std::wstring game_display_name(const RuntimeState& state, const std::filesystem::path& path);
+
 void start_recording(RuntimeState& state) {
     // The log folder, like everything else the Tools menu produces. It used to
     // have a "recordings" folder of its own, which meant two places to look.
     auto directory = log_directory();
-    auto name = state.rom_path.stem().wstring();
+    auto name = game_name(state);
     if (name.empty()) {
         name = L"genx";
     }
@@ -2418,7 +2428,7 @@ std::filesystem::path log_directory() {
 
 // A file name that sorts by time and cannot collide with the previous take.
 std::wstring log_file_name(const RuntimeState& state, const wchar_t* suffix) {
-    auto name = state.rom_path.stem().wstring();
+    auto name = game_name(state);
     if (name.empty()) {
         name = L"genx";
     }
@@ -2842,7 +2852,7 @@ void write_diagnostic_log(RuntimeState& state) {
 
     out << "GenX diagnostic log\n";
     out << "===================\n\n";
-    out << "cartridge : " << mercury::core::path_text(state.rom_path.filename()) << "\n";
+    out << "cartridge : " << narrow(game_display_name(state, state.rom_path)) << "\n";
     out << "machine   : " << (state.machine == Machine::genesis ? "Mega Drive / Genesis"
                                                                 : "Game Gear / Master System")
         << "\n";
@@ -3244,7 +3254,7 @@ void dump_memory(RuntimeState& state) {
 
     out << "GenX memory dump\n";
     out << "================\n";
-    out << "cartridge : " << mercury::core::path_text(state.rom_path.filename()) << "\n";
+    out << "cartridge : " << narrow(game_display_name(state, state.rom_path)) << "\n";
     out << "\nRuns of sixteen zero bytes are collapsed to a single line.\n";
     dump("VRAM", state.genesis.vdp().vram());
     dump("work RAM", state.genesis.work_ram());
@@ -4404,7 +4414,7 @@ void save_recent(const RuntimeState& state) {
 
 // Defined here rather than forward-declared: an opaque enum has no size, so a
 // declaration alone is not enough to pass one by value.
-enum class LabelBucket { fixed, recent, states };
+enum class LabelBucket { fixed, recent, states, drives_open, drives_swap };
 // Labels are keyed by WINDOW as well as by bucket. The three buckets keep one
 // window's menus from clearing each other's labels; the owner keeps one
 // window from clearing ANOTHER window's, which is what a Gear Link made
@@ -4432,7 +4442,7 @@ void rebuild_recent_menu(RuntimeState& state) {
             // "&1" ... "&9" then "1&0": the mnemonic is the digit, and the tenth
             // slot uses 0 so all ten are reachable from the keyboard.
             std::wstring label = i < 9 ? (L"&" + std::to_wstring(i + 1)) : L"1&0";
-            label += L"  " + state.recent[i].filename().wstring();
+            label += L"  " + game_display_name(state, state.recent[i]);
             AppendMenuW(state.recent_menu, MF_STRING,
                         static_cast<UINT_PTR>(IDM_FILE_RECENT_FIRST + i), label.c_str());
         }
@@ -4448,6 +4458,75 @@ void rebuild_recent_menu(RuntimeState& state) {
     if (state.window != nullptr) {
         DrawMenuBar(state.window);
     }
+}
+
+// One of the two optical-drive lists, filled in as it opens: every drive
+// Windows reports as a CD-ROM, with the disc's label, and greyed out when it
+// is empty. Built on opening rather than at startup because discs go in and
+// out - and asking a drive can spin it up, which is fine for a menu that was
+// just opened and not for every frame.
+void rebuild_drive_menu(RuntimeState& state, HMENU menu, UINT first_id, UINT none_id,
+                        LabelBucket bucket) {
+    if (menu == nullptr) {
+        return;
+    }
+    while (GetMenuItemCount(menu) > 0) {
+        DeleteMenu(menu, 0, MF_BYPOSITION);
+    }
+    const auto drives = mercury::platform::list_cd_drives();
+    if (drives.empty()) {
+        AppendMenuW(menu, MF_STRING | MF_GRAYED, none_id, L"(no CD drive found)");
+    }
+    for (const auto& drive : drives) {
+        std::wstring label = std::wstring(L"&") + drive.letter + L":  ";
+        label += drive.has_disc ? (drive.label.empty() ? std::wstring(L"disc") : drive.label)
+                                : std::wstring(L"(no disc)");
+        AppendMenuW(menu, MF_STRING | (drive.has_disc ? MF_ENABLED : MF_GRAYED),
+                    static_cast<UINT_PTR>(first_id + (drive.letter - L'A')), label.c_str());
+    }
+    menu_labels(bucket, &state).clear();
+    make_menu_owner_drawn(menu, bucket, &state);
+}
+
+// The disc in a drive is called by its own title, from the disc's header -
+// "FINAL FIGHT CD" - since the path ("E:\") names the drive, not the game.
+// Characters a file name cannot hold are dropped, because this is also what
+// its save states and logs are named after.
+std::wstring drive_disc_name(const RuntimeState& state) {
+    std::wstring name = widen(state.genesis.segacd().disc().title());
+    std::wstring clean;
+    for (const wchar_t c : name) {
+        if (c < 0x20) {
+            continue;  // padding or junk in the header, not part of a name
+        }
+        clean.push_back(std::wcschr(L"<>:\"/\\|?*", c) != nullptr ? L'_' : c);
+    }
+    while (!clean.empty() && (clean.back() == L' ' || clean.back() == L'.')) {
+        clean.pop_back();
+    }
+    return clean.empty() ? std::wstring(L"Sega CD") : clean;
+}
+
+// What the loaded game is called, for its save states, saves, logs and
+// cheats: the file's name without its extension, or a drive disc's title.
+std::wstring game_name(const RuntimeState& state) {
+    if (mercury::platform::cd_drive_letter(state.rom_path) != 0) {
+        return drive_disc_name(state);
+    }
+    return state.rom_path.stem().wstring();
+}
+
+// How a game is shown in the title bar, a prompt or the recent list: the
+// file's name, or "<title> (drive E:)" for a disc in a drive.
+std::wstring game_display_name(const RuntimeState& state, const std::filesystem::path& path) {
+    const wchar_t letter = mercury::platform::cd_drive_letter(path);
+    if (letter == 0) {
+        return path.filename().wstring();
+    }
+    if (path == state.rom_path && state.rom_loaded && state.genesis.cd_mode()) {
+        return drive_disc_name(state) + L" (drive " + letter + L":)";
+    }
+    return std::wstring(L"Sega CD in drive ") + letter + L":";
 }
 
 // %APPDATA%\GenX\states\<rom name>.st<slot>. Named after the cartridge so
@@ -4484,7 +4563,7 @@ std::vector<std::filesystem::path> all_state_files() {
 
 std::filesystem::path state_slot_path(const RuntimeState& state, int slot) {
     auto directory = states_directory();
-    auto name = state.rom_path.stem().wstring();
+    auto name = game_name(state);
     if (name.empty()) {
         name = L"cartridge";
     }
@@ -4522,7 +4601,7 @@ std::filesystem::path battery_path(const RuntimeState& state) {
                          : state.save_folders[which];
     std::error_code ignored;
     std::filesystem::create_directories(directory, ignored);
-    auto name = state.rom_path.stem().wstring();
+    auto name = game_name(state);
     if (name.empty()) {
         name = L"cartridge";
     }
@@ -4688,7 +4767,7 @@ void delete_state_slot(RuntimeState& state, int slot) {
         return;
     }
     std::wstring prompt = L"Delete save state " + std::to_wstring(slot) + L" for " +
-                          state.rom_path.filename().wstring() + L"?\n\nThis cannot be undone.";
+                          game_display_name(state, state.rom_path) + L"?\n\nThis cannot be undone.";
     if (MessageBoxW(state.window, prompt.c_str(), L"GenX - Delete State",
                     MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) {
         return;
@@ -4842,6 +4921,11 @@ HMENU build_menu(RuntimeState& state) {
     AppendMenuW(open, MF_STRING, IDM_FILE_OPEN_GG, L"Game Gear / &Master System...");
     AppendMenuW(open, MF_STRING, IDM_FILE_OPEN_32X, L"&32X...");
     AppendMenuW(open, MF_STRING, IDM_FILE_OPEN_CD, L"Sega &CD...");
+    // A real disc in the PC's optical drive. Listed when the submenu opens -
+    // see rebuild_drive_menu - because discs go in and come out.
+    state.drive_menu = CreatePopupMenu();
+    AppendMenuW(open, MF_POPUP, reinterpret_cast<UINT_PTR>(state.drive_menu),
+                L"Sega CD from &drive");
     AppendMenuW(file, MF_POPUP, reinterpret_cast<UINT_PTR>(open), L"&Open ROM");
     AppendMenuW(file, MF_POPUP, reinterpret_cast<UINT_PTR>(state.recent_menu), L"&Recent Files");
     AppendMenuW(file, MF_STRING, IDM_FILE_CLOSE, L"&Close ROM");
@@ -4901,6 +4985,9 @@ HMENU build_menu(RuntimeState& state) {
     // CD player and backup RAM manager are reached.
     HMENU disc = CreatePopupMenu();
     AppendMenuW(disc, MF_STRING, IDM_CD_SWAP, L"&Swap disc...");
+    state.swap_drive_menu = CreatePopupMenu();
+    AppendMenuW(disc, MF_POPUP, reinterpret_cast<UINT_PTR>(state.swap_drive_menu),
+                L"Swap to disc in d&rive");
     AppendMenuW(disc, MF_STRING, IDM_CD_BOOT, L"&Boot Sega CD");
     AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(disc), L"Sega C&D");
 
@@ -5374,7 +5461,7 @@ void update_title(const RuntimeState& state) {
         title += state.link_secondary ? L" - Gear Link 2" : L" - Gear Link 1";
     }
     if (state.rom_loaded) {
-        title += L" - " + state.rom_path.filename().wstring();
+        title += L" - " + game_display_name(state, state.rom_path);
     }
     // Netplay is a MODE, not an event, so it belongs in the title rather than
     // in the status line - which clears itself after two seconds and left a
@@ -5454,8 +5541,7 @@ std::string current_game_key(const RuntimeState& state) {
     if (state.rom_path.empty()) {
         return {};
     }
-    const auto stem = state.rom_path.stem().u8string();
-    return std::string(stem.begin(), stem.end());
+    return narrow(game_name(state));
 }
 
 bool cheat_applies_here(const LibraryCheat& entry, const std::string& game) {
@@ -8599,6 +8685,8 @@ void prompt_open_rom(RuntimeState& state, int system) {
 //
 // The file dialog starts in the folder the current disc came from, because
 // the other discs of a set are nearly always its siblings.
+bool swap_disc_to(RuntimeState& state, const std::filesystem::path& path);
+
 void swap_disc(RuntimeState& state) {
     if (!state.rom_loaded || state.machine != Machine::genesis ||
         !state.genesis.cd_mode()) {
@@ -8633,10 +8721,18 @@ void swap_disc(RuntimeState& state) {
     if (!GetOpenFileNameW(&dialog)) {
         return;
     }
+    swap_disc_to(state, path);
+}
+
+// The swap itself, for a file chosen above or for a disc in an optical drive.
+bool swap_disc_to(RuntimeState& state, const std::filesystem::path& path) {
+    if (!state.rom_loaded || state.machine != Machine::genesis || !state.genesis.cd_mode()) {
+        return false;
+    }
     std::string error;
     if (!state.genesis.segacd().swap_disc(path, error)) {
         MessageBoxW(state.window, widen(error).c_str(), L"GenX", MB_OK | MB_ICONERROR);
-        return;
+        return false;
     }
     // The window title follows the disc, not the session: a save state or a
     // screenshot taken after the swap belongs to the disc that is in now.
@@ -8644,6 +8740,41 @@ void swap_disc(RuntimeState& state) {
     remember_recent(state, state.rom_path);
     update_title(state);
     set_status(state, L"Disc swapped - " + widen(state.genesis.segacd().disc().title()));
+    return true;
+}
+
+// Open ROM > Sega CD from drive: the disc in that drive, exactly as if its
+// image had been picked in the Open dialog - the BIOS search, the recent list
+// and everything else take the drive's path ("E:\") as they would a file's.
+void open_disc_in_drive(RuntimeState& state, wchar_t letter) {
+    const auto path = mercury::platform::cd_drive_path(letter);
+    std::string error;
+    LoadProblem problem = LoadProblem::other;
+    if (!load_rom_from_path(state, path, error, &problem) &&
+        !report_load_failure(state, path, error, problem)) {
+        return;
+    }
+    remember_recent(state, path);
+    InvalidateRect(state.window, nullptr, TRUE);
+}
+
+// A disc went into, or came out of, an optical drive while GenX was running.
+// When that drive is the one the game is playing from, it is the same as
+// opening or closing a real Sega CD's tray: taking the disc out leaves the
+// drive empty and the game carries on, and putting one in is a disc swap -
+// which is how a multi-disc game is played from real discs.
+void drive_media_changed(RuntimeState& state, DWORD unit_mask, bool arrived) {
+    const wchar_t letter = mercury::platform::cd_drive_letter(state.rom_path);
+    if (letter == 0 || !state.rom_loaded || state.machine != Machine::genesis ||
+        !state.genesis.cd_mode() || (unit_mask & (1u << (letter - L'A'))) == 0) {
+        return;
+    }
+    if (arrived) {
+        swap_disc_to(state, state.rom_path);
+        return;
+    }
+    state.genesis.segacd().eject_disc();
+    set_status(state, std::wstring(L"Disc taken out of drive ") + letter + L":");
 }
 
 // The console with an empty tray, which is a real machine doing a real thing:
@@ -11018,6 +11149,11 @@ void step_gear_link_frame(RuntimeState& primary) {
 
 // This build's version, from CMakeLists.txt.
 constexpr wchar_t kGenxVersion[] = L"" GENX_VERSION;
+// The same with any pre-release label - "1.1.3 RC1" - for showing; empty
+// label for a release. A labelled build is older than the release with its
+// numbers, so the update check offers a release candidate the final.
+constexpr wchar_t kGenxVersionText[] = L"" GENX_VERSION_TEXT;
+constexpr bool kGenxPrerelease = sizeof(GENX_VERSION_LABEL) > 1;
 // Where a new version is downloaded from. Fixed here rather than taken from
 // GitHub's reply, so the button can only ever open GenX's own release page.
 constexpr wchar_t kReleasesPage[] = L"https://github.com/GamesExObscura/GenX/releases/latest";
@@ -11036,7 +11172,7 @@ bool is_version_flag(const wchar_t* argument) {
 // front end's redirected output is), and that is used first. Failing that,
 // the line goes to the console GenX was started from, if there is one.
 void print_version() {
-    const std::string line = std::string("GenX ") + GENX_VERSION + "\r\n";
+    const std::string line = std::string("GenX ") + GENX_VERSION_TEXT + "\r\n";
     DWORD written = 0;
     HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
     if (out != nullptr && out != INVALID_HANDLE_VALUE) {
@@ -11176,7 +11312,7 @@ void start_update_check(RuntimeState& state, bool asked) {
 }
 
 void show_update_result(RuntimeState& state, const UpdateCheck& check) {
-    const std::wstring running = std::wstring(L"v") + kGenxVersion;
+    const std::wstring running = std::wstring(L"v") + kGenxVersionText;
     if (check.latest.empty()) {
         if (check.asked) {
             MessageBoxW(state.window,
@@ -11186,7 +11322,10 @@ void show_update_result(RuntimeState& state, const UpdateCheck& check) {
         }
         return;
     }
-    if (parse_version(check.latest) <= parse_version(kGenxVersion)) {
+    const auto latest = parse_version(check.latest);
+    const auto mine = parse_version(kGenxVersion);
+    const bool newer = latest > mine || (kGenxPrerelease && latest == mine);
+    if (!newer) {
         if (check.asked) {
             MessageBoxW(state.window,
                         (L"You have the latest version of GenX (" + running + L").").c_str(),
@@ -11240,6 +11379,23 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             const UINT command = LOWORD(wparam);
             if (command >= IDM_FILE_RECENT_FIRST && command <= IDM_FILE_RECENT_LAST) {
                 open_recent(*state, static_cast<std::size_t>(command - IDM_FILE_RECENT_FIRST));
+                return 0;
+            }
+            if (command >= IDM_FILE_OPEN_DRIVE_FIRST && command <= IDM_FILE_OPEN_DRIVE_LAST) {
+                open_disc_in_drive(*state,
+                                   static_cast<wchar_t>(L'A' + (command - IDM_FILE_OPEN_DRIVE_FIRST)));
+                return 0;
+            }
+            if (command >= IDM_CD_SWAP_DRIVE_FIRST && command <= IDM_CD_SWAP_DRIVE_LAST) {
+                const auto letter = static_cast<wchar_t>(L'A' + (command - IDM_CD_SWAP_DRIVE_FIRST));
+                if (!state->rom_loaded || state->machine != Machine::genesis ||
+                    !state->genesis.cd_mode()) {
+                    // Nothing to swap into: open the disc instead, which is what
+                    // someone choosing a drive with no game running wants.
+                    open_disc_in_drive(*state, letter);
+                } else {
+                    swap_disc_to(*state, mercury::platform::cd_drive_path(letter));
+                }
                 return 0;
             }
             if (command >= IDM_EMU_SAVE_STATE_FIRST && command <= IDM_EMU_SAVE_STATE_LAST) {
@@ -11694,6 +11850,16 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             // than once at startup.
             if (state != nullptr) {
                 rebuild_state_menus(*state);
+                // The drive lists, likewise, but only the one being opened:
+                // asking a drive what is in it can spin it up.
+                const auto opening = reinterpret_cast<HMENU>(wparam);
+                if (opening == state->drive_menu) {
+                    rebuild_drive_menu(*state, state->drive_menu, IDM_FILE_OPEN_DRIVE_FIRST,
+                                       IDM_FILE_OPEN_DRIVE_NONE, LabelBucket::drives_open);
+                } else if (opening == state->swap_drive_menu) {
+                    rebuild_drive_menu(*state, state->swap_drive_menu, IDM_CD_SWAP_DRIVE_FIRST,
+                                       IDM_CD_SWAP_DRIVE_NONE, LabelBucket::drives_swap);
+                }
             }
             return DefWindowProcW(hwnd, message, wparam, lparam);
         case WM_SIZE:
@@ -12026,6 +12192,19 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             if (wparam == DBT_DEVNODES_CHANGED) {
                 rescan_dinput();
             }
+            // A disc put into or taken out of an optical drive. Windows sends
+            // this to every top-level window with no registration needed.
+            if ((wparam == DBT_DEVICEARRIVAL || wparam == DBT_DEVICEREMOVECOMPLETE) && lparam != 0 &&
+                state != nullptr) {
+                const auto* header = reinterpret_cast<const DEV_BROADCAST_HDR*>(lparam);
+                if (header->dbch_devicetype == DBT_DEVTYP_VOLUME) {
+                    const auto* volume = reinterpret_cast<const DEV_BROADCAST_VOLUME*>(lparam);
+                    if ((volume->dbcv_flags & DBTF_MEDIA) != 0) {
+                        drive_media_changed(*state, volume->dbcv_unitmask,
+                                            wparam == DBT_DEVICEARRIVAL);
+                    }
+                }
+            }
             return TRUE;
         case WM_CLOSE:
             if (state != nullptr && state->link_secondary) {
@@ -12088,6 +12267,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         }
         LocalFree(argv);
     }
+
+    // Real discs in the PC's optical drives: from here on "E:\" opens the
+    // disc in drive E: anywhere a disc image's path is accepted - including
+    // on the command line, which is how a front end would start one.
+    mercury::segacd::Disc::set_source_opener(mercury::platform::cd_drive_opener());
 
     RuntimeState state;
     state.instance = instance;

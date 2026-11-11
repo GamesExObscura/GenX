@@ -22,6 +22,8 @@
 
 #include "mercury/genesis/genesis.hpp"
 #include "mercury/segacd/bios.hpp"
+#include "mercury/segacd/disc.hpp"
+#include "../platform/win32_cd_drive.hpp"
 #include "host_profiler.hpp"
 
 namespace {
@@ -2890,6 +2892,9 @@ int run_state_check(const std::filesystem::path& rom, int save_at, int distance,
 }
 
 int main(int argc, char** argv) {
+    // A disc straight from an optical drive: genesis_probe E:\ (see
+    // platform/win32_cd_drive.hpp). Image files are unaffected.
+    mercury::segacd::Disc::set_source_opener(mercury::platform::cd_drive_opener());
     std::filesystem::path scratch = std::filesystem::current_path();
     std::filesystem::path rom;
     int frames = 60;

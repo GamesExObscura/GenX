@@ -39,6 +39,12 @@
 // can be looked at without hunting through AppData for it.
 #define IDM_FILE_OPEN_GENX_FOLDER 40033
 #define IDM_FILE_OPEN_LOG_FOLDER 40034
+// Open ROM > Sega CD from drive: one slot per drive letter, A to Z, so the
+// handler turns a command into a letter by subtraction. The list is built when
+// the submenu opens, because discs come and go.
+#define IDM_FILE_OPEN_DRIVE_FIRST 40040
+#define IDM_FILE_OPEN_DRIVE_LAST 40065
+#define IDM_FILE_OPEN_DRIVE_NONE 40066
 
 // Ten contiguous slots for the recent list, so the handler can turn a command
 // into an index by subtracting the first.
@@ -126,6 +132,11 @@
 // its own front end, the CD player and the memory manager that formats and
 // erases backup RAM. Reachable with no game loaded at all.
 #define IDM_CD_BOOT 40502
+// Swap to the disc in an optical drive, A to Z, the same way as the Open ROM
+// list above.
+#define IDM_CD_SWAP_DRIVE_FIRST 40510
+#define IDM_CD_SWAP_DRIVE_LAST 40535
+#define IDM_CD_SWAP_DRIVE_NONE 40536
 
 // Cheats. Its own menu for the same reason: a code is typed while playing.
 #define IDM_CHEAT_GAME_GENIE 40601

@@ -97,8 +97,24 @@ Set both folders in **Configure → BIOS**.
 |---|---|
 | Genesis / Mega Drive | `.md`, `.gen`, `.smd`, `.bin`, `.zip` |
 | 32X | `.32x`, `.bin`, `.zip` |
-| Sega CD | `.cue` (with its `.bin` files), `.iso`, `.chd` |
+| Sega CD | `.cue` (with its `.bin` files), `.iso`, `.chd`, or a real disc in your PC's CD/DVD drive |
 | Game Gear / Master System | `.gg`, `.sms`, `.zip` |
+
+### Can I play my real Sega CD discs?
+
+Yes, if your PC has a CD or DVD drive (a USB one works too). Put the disc in,
+then choose **File → Open ROM → Sega CD from drive** and pick the drive.
+
+- GenX reads the game and its CD music straight from the disc, and reads
+  ahead while you play so the drive keeps up.
+- You still need the Sega CD BIOS for the disc's region.
+- **Changing discs:** for a game with more than one disc, use
+  **Sega CD → Swap to disc in drive**, or just put the next disc in the drive.
+  GenX swaps it in as a real Sega CD would.
+- A disc in a drive gets its own save states, named after the game's title.
+  They aren't shared with save states from an image of the same game.
+- From the command line or a front end, `genx.exe E:\` starts the disc in
+  drive E:.
 
 ## Controls
 

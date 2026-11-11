@@ -33,7 +33,7 @@ BEGIN
             VALUE "LegalCopyright",   "Licensed under the GNU GPL, version 3"
             VALUE "OriginalFilename", "genx.exe"
             VALUE "ProductName",      "GenX"
-            VALUE "ProductVersion",   GENX_VERSION
+            VALUE "ProductVersion",   GENX_VERSION_TEXT
         END
     END
     BLOCK "VarFileInfo"

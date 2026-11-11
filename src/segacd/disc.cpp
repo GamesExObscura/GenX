@@ -41,9 +41,28 @@ int parse_msf(const std::string& text) {
 constexpr std::uint8_t kSync[12] = {0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
                                     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00};
 
+// The front end's drive code, if it has given any. One for the program: there
+// is one set of drives however many Discs are open.
+DiscSourceOpener& source_opener() {
+    static DiscSourceOpener opener;
+    return opener;
+}
+
 }  // namespace
 
+void Disc::set_source_opener(DiscSourceOpener opener) {
+    source_opener() = std::move(opener);
+}
+
+bool Disc::is_source_path(const std::filesystem::path& path) {
+    const auto& opener = source_opener();
+    return opener.claims && opener.open && opener.claims(path);
+}
+
 bool Disc::is_disc_image(const std::filesystem::path& path) {
+    if (is_source_path(path)) {
+        return true;
+    }
     const auto extension = lower(path_text(path.extension()));
     if (extension == ".cue" || extension == ".iso" || extension == ".chd") {
         return true;
@@ -66,6 +85,7 @@ void Disc::close() {
     file_paths_.clear();
     header_.clear();
     chd_.reset();
+    source_.reset();
     lead_out_ = 0;
 }
 
@@ -224,6 +244,16 @@ bool Disc::read_bytes(int file, std::uint64_t offset, void* out, std::size_t siz
 
 bool Disc::open(const std::filesystem::path& image, std::string& error) {
     close();
+    if (is_source_path(image)) {
+        auto source = source_opener().open(image, error);
+        if (source == nullptr) {
+            if (error.empty()) {
+                error = "cannot read the disc in " + path_text(image);
+            }
+            return false;
+        }
+        return open(std::move(source), error);
+    }
     const auto extension = lower(path_text(image.extension()));
     bool ok = false;
     if (extension == ".cue") {
@@ -247,9 +277,48 @@ bool Disc::open(const std::filesystem::path& image, std::string& error) {
         close();
         return false;
     }
+    return finish_open(error);
+}
+
+// A disc from a drive. The table of contents is all there is: it gives each
+// track's INDEX 01 and nothing about the pause before it, so a track simply
+// runs to where the next one starts - the pause plays at the end of the
+// previous track, as it does on a CD player.
+bool Disc::open(std::unique_ptr<DiscSource> source, std::string& error) {
+    close();
+    if (source == nullptr) {
+        error = "no disc";
+        return false;
+    }
+    const auto& toc = source->tracks();
+    if (toc.empty()) {
+        error = "the disc in " + source->describe() + " has no tracks";
+        return false;
+    }
+    for (std::size_t i = 0; i < toc.size(); ++i) {
+        Track track;
+        // Sega CD discs are Mode 1. A drive's table of contents says only
+        // data or audio, and Mode 2 would need the sub-header the source
+        // does not return.
+        track.type = toc[i].audio ? TrackType::audio : TrackType::mode1;
+        track.sector_size = toc[i].audio ? 2352 : 2048;
+        track.start = toc[i].start;
+        track.end = i + 1 < toc.size() ? toc[i + 1].start : source->lead_out();
+        track.file = -1;
+        track.file_lba0 = track.start;
+        tracks_.push_back(track);
+    }
+    lead_out_ = source->lead_out();
+    source_ = std::move(source);
+    return finish_open(error);
+}
+
+bool Disc::finish_open(std::string& error) {
     load_header();
     if (header_.size() < 16 || std::memcmp(header_.data(), "SEGADISCSYSTEM", 14) != 0) {
-        error = "not a Sega CD disc: the data track does not start with SEGADISCSYSTEM";
+        error = source_ != nullptr
+                    ? "the disc in " + source_->describe() + " is not a Sega CD"
+                    : "not a Sega CD disc: the data track does not start with SEGADISCSYSTEM";
         close();
         return false;
     }
@@ -526,6 +595,10 @@ bool Disc::read_data(int lba, std::uint8_t* out, std::uint8_t* subheader) {
     if (track.type == TrackType::audio || lba < track.file_lba0) {
         return false;
     }
+    if (source_ != nullptr) {
+        // Mode 1 only: a drive's cooked read has no sub-header to give.
+        return subheader == nullptr && source_->read_data(lba, out);
+    }
     if (track.chd_frame0 >= 0) {
         std::uint8_t frame[2448];
         if (!read_chd_frame(track, lba, frame)) {
@@ -570,6 +643,15 @@ bool Disc::read_audio(int lba, std::int16_t* out1176) {
         return false;
     }
     std::uint8_t raw[2352];
+    if (source_ != nullptr) {
+        if (!source_->read_audio(lba, raw)) {
+            return false;
+        }
+        for (int i = 0; i < 1176; ++i) {
+            out1176[i] = static_cast<std::int16_t>(raw[i * 2] | (raw[i * 2 + 1] << 8));
+        }
+        return true;
+    }
     if (track.chd_frame0 >= 0) {
         std::uint8_t frame[2448];
         if (!read_chd_frame(track, lba, frame)) {
@@ -628,6 +710,9 @@ std::string Disc::describe() const {
     std::ostringstream out;
     out << "disc: " << track_count() << " track" << (track_count() == 1 ? "" : "s")
         << ", lead-out at block " << lead_out_ << ", region " << (region() ? region() : '?');
+    if (source_ != nullptr) {
+        out << ", read from " << source_->describe();
+    }
     for (int i = 0; i < track_count(); ++i) {
         const auto& t = track(i);
         out << "\n  track " << (i + 1) << ": "

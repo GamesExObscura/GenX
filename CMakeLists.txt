@@ -88,6 +88,9 @@ target_link_libraries(mercury_bootstrap PRIVATE mercury)
 add_executable(genx WIN32
     src/runtime_win32.cpp
     src/runtime_win32.rc
+    # Real Sega CD discs in an optical drive - Windows code, so it lives
+    # beside the front end rather than in the core.
+    src/platform/win32_cd_drive.cpp
 )
 
 # gdiplus decodes the embedded logo PNG (it keeps the alpha channel, which a
@@ -100,7 +103,18 @@ target_link_libraries(genx PRIVATE mercury gdiplus dwmapi comdlg32 msimg32 ole32
 # the newest release on GitHub. Bump it with each release. It can be overridden
 # when configuring (-DGENX_VERSION=0.9.0) to test the "new version" message.
 if(NOT GENX_VERSION)
-    set(GENX_VERSION 1.1.2)
+    set(GENX_VERSION 1.1.3)
+endif()
+# A pre-release label such as RC1, empty for a release. Shown after the
+# version ("GenX 1.1.3 RC1") and it makes the update check treat the release
+# of the same number as newer, so a release candidate is offered the final.
+if(NOT DEFINED GENX_VERSION_LABEL)
+    set(GENX_VERSION_LABEL "")
+endif()
+if(GENX_VERSION_LABEL)
+    set(GENX_VERSION_TEXT "${GENX_VERSION} ${GENX_VERSION_LABEL}")
+else()
+    set(GENX_VERSION_TEXT "${GENX_VERSION}")
 endif()
 # The three numbers also go into the exe's file properties (VERSIONINFO in
 # runtime_win32.rc), which is where Windows and front ends read a version
@@ -109,6 +123,8 @@ if(NOT GENX_VERSION MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)$")
     message(FATAL_ERROR "GENX_VERSION must look like 1.2.3, not \"${GENX_VERSION}\"")
 endif()
 target_compile_definitions(genx PRIVATE GENX_VERSION="${GENX_VERSION}"
+                                        GENX_VERSION_LABEL="${GENX_VERSION_LABEL}"
+                                        GENX_VERSION_TEXT="${GENX_VERSION_TEXT}"
                                         GENX_VERSION_MAJOR=${CMAKE_MATCH_1}
                                         GENX_VERSION_MINOR=${CMAKE_MATCH_2}
                                         GENX_VERSION_PATCH=${CMAKE_MATCH_3})
@@ -143,6 +159,8 @@ add_executable(genesis_probe
     src/tools/genesis_probe.cpp
     # MERCURY_HOST_PROFILE=1: where the emulator's own time goes.
     src/tools/host_profiler.cpp
+    # So the probe can run a disc straight from a drive: genesis_probe E:\
+    src/platform/win32_cd_drive.cpp
 )
 
 target_link_libraries(genesis_probe PRIVATE mercury)

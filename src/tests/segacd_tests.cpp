@@ -518,6 +518,82 @@ void test_not_a_sega_cd() {
     check(!error.empty(), "with a reason");
 }
 
+// A DISC FROM A DRIVE, without a drive.
+//
+// What a real optical drive gives through DiscSource - a table of contents of
+// INDEX 01 positions, cooked data blocks and raw audio - played back from
+// memory, so everything above the source is tested the way a drive uses it.
+class FakeDrive final : public mercury::segacd::DiscSource {
+  public:
+    explicit FakeDrive(int* reads = nullptr) : reads_(reads) {
+        tracks_ = {{false, 0}, {true, 350}};
+    }
+    const std::vector<Track>& tracks() const override { return tracks_; }
+    int lead_out() const override { return 500; }
+    bool read_data(int lba, std::uint8_t* out) override {
+        if (reads_ != nullptr) ++*reads_;
+        std::memset(out, 0, 2048);
+        if (lba == 0) {
+            std::memcpy(out, "SEGADISCSYSTEM  ", 16);
+            // Titles are padded with spaces, as on a real disc.
+            std::memset(out + 0x120, ' ', 0x60);
+            std::memcpy(out + 0x150, "FAKE DRIVE DISC", 15);
+            out[0x20B] = 0xA1;  // the Japanese security code
+        }
+        out[100] = static_cast<std::uint8_t>(lba);
+        return true;
+    }
+    bool read_audio(int lba, std::uint8_t* out) override {
+        for (int i = 0; i < 2352; i += 2) {
+            out[i] = static_cast<std::uint8_t>(lba);  // low byte first
+            out[i + 1] = 0x01;
+        }
+        return true;
+    }
+    std::string describe() const override { return "fake drive"; }
+
+  private:
+    std::vector<Track> tracks_;
+    int* reads_ = nullptr;
+};
+
+void test_disc_from_a_drive() {
+    std::printf("a disc read through a DiscSource, as from an optical drive\n");
+    mercury::segacd::Disc disc;
+    std::string error;
+    check(disc.open(std::make_unique<FakeDrive>(), error), "opens (" + error + ")");
+    check(disc.from_source(), "and knows it is from a source");
+    check_eq(static_cast<std::uint32_t>(disc.track_count()), 2, "two tracks from the table of contents");
+    check_eq(static_cast<std::uint32_t>(disc.track(0).end), 350,
+             "the data track runs to where the audio track starts");
+    check_eq(static_cast<std::uint32_t>(disc.lead_out()), 500, "lead-out from the table of contents");
+    check(disc.title() == "FAKE DRIVE DISC", "the title comes from the drive's block 0");
+    check_eq(static_cast<std::uint32_t>(disc.region()), 'J', "and the region from its security code");
+    std::vector<std::uint8_t> block(2048);
+    check(disc.read_data(42, block.data()) && block[100] == 42, "a data block reads");
+    std::int16_t audio[1176];
+    check(disc.read_audio(400, audio), "an audio block reads");
+    check_eq(static_cast<std::uint16_t>(audio[0]), 0x0100 | (400 & 0xFF), "little-endian, as from a .bin");
+    check(!disc.read_audio(42, audio), "audio from the data track is refused");
+    check(disc.describe().find("fake drive") != std::string::npos, "the summary names the drive");
+
+    // Opened by path through the front end's opener, as "E:\" is.
+    mercury::segacd::DiscSourceOpener opener;
+    opener.claims = [](const std::filesystem::path& path) { return path == "fakedrive:"; };
+    opener.open = [](const std::filesystem::path&, std::string&) {
+        return std::unique_ptr<mercury::segacd::DiscSource>(std::make_unique<FakeDrive>());
+    };
+    mercury::segacd::Disc::set_source_opener(opener);
+    check(mercury::segacd::Disc::is_disc_image("fakedrive:"), "a claimed path counts as a disc");
+    check(!mercury::segacd::Disc::is_disc_image("game.md"), "an unclaimed one is still judged as a file");
+    mercury::segacd::Disc by_path;
+    check(by_path.open("fakedrive:", error) && by_path.from_source(), "a claimed path opens the source");
+    SegaCd cd;
+    check(cd.insert_disc("fakedrive:", error), "and the CD unit takes it like any disc");
+    mercury::segacd::Disc::set_source_opener({});
+    check(!mercury::segacd::Disc::is_disc_image("fakedrive:"), "with no opener, nothing is claimed");
+}
+
 // WHICH CONSOLE A BIOS BELONGS TO.
 //
 // Read from the region message the BIOS shows when its own power-on check
@@ -614,6 +690,7 @@ int main() {
     std::printf("Sega CD tests\n=============\n\n");
     test_odd_names_beside_a_disc();
     test_bios_console_region();
+    test_disc_from_a_drive();
     test_power_on_state();
     test_bios_and_hint_vector();
     test_program_ram_window();

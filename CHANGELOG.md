@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.1.3 (2026-11-11)
+
+### Added
+
+- **Play Sega CD discs from your PC's CD/DVD drive.** Choose **File → Open ROM
+  → Sega CD from drive** and pick the drive with the disc in it. GenX reads the
+  game and its CD music straight from the disc, with a read-ahead cache so the
+  drive's seeks don't hold the game up.
+  - **Sega CD → Swap to disc in drive** changes discs mid-game. Putting a new
+    disc into the drive that's playing swaps it automatically, like opening a
+    real Sega CD's tray.
+  - The recent files list remembers the drive, and `genx.exe E:\` starts the
+    disc in drive E: from the command line or a front end.
+  - Save states and logs for a disc in a drive are named after the game's
+    title.
+
 ## v1.1.2 (2026-11-10)
 
 ### Fixed

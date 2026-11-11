@@ -28,9 +28,10 @@ GenX does not come with any games or BIOS files. You need your own.
   the SVP chip used by Virtua Racing.
 - 32X. GenX has its own start-up code, so the three 32X BIOS files are
   optional.
-- Sega CD / Mega-CD from `.cue`/`.bin`, `.iso` or `.chd`. Disc swapping works,
-  and you can boot the BIOS with no disc to reach its CD player and memory
-  manager. Sega CD 32X discs work too.
+- Sega CD / Mega-CD from `.cue`/`.bin`, `.iso` or `.chd`, or straight from a
+  real disc in your PC's CD/DVD drive. Disc swapping works, and you can boot
+  the BIOS with no disc to reach its CD player and memory manager. Sega CD 32X
+  discs work too.
 - Game Gear, and Master System through the same core.
 - ROMs can be loaded straight from `.zip` files.
 
@@ -111,7 +112,8 @@ games.
 
 - `genx.exe "path\to\game.zip"` starts a game straight away. That's all a
   front end such as LaunchBox needs.
-- `genx.exe -v` (or `--version`) prints the version, such as `GenX 1.1.2`, and
+- `genx.exe E:\` starts the Sega CD disc in drive E:.
+- `genx.exe -v` (or `--version`) prints the version, such as `GenX 1.1.3`, and
   exits without opening a window. The version is also in the exe's
   **Properties → Details**.
 

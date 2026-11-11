@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "mercury/core/chd.hpp"
+#include "mercury/segacd/disc_source.hpp"
 
 namespace mercury::segacd {
 
@@ -26,7 +27,9 @@ namespace mercury::segacd {
 //   - a bare .iso of the data track (2048 bytes a sector), or a raw .bin with
 //     the sector sync pattern (2352), with a .cue alongside picked up if there
 //     is one so the audio tracks come with it;
-//   - .chd, MAME's compressed container, through mercury::core::Chd.
+//   - .chd, MAME's compressed container, through mercury::core::Chd;
+//   - a real disc in an optical drive, through a DiscSource the front end
+//     supplies (set_source_opener) - the path is then the drive, "E:\".
 //
 // A CHD track is addressed by frame rather than by byte, and its frames are
 // NOT where the disc says they are: tracks are padded to a multiple of four
@@ -68,10 +71,22 @@ class Disc {
     // .cue, .iso and .chd; a .bin could be either, so for that it looks at the
     // first bytes - a disc starts with the CD sync pattern (raw) or with
     // SEGADISCSYSTEM (cooked), and no cartridge does.
+    // A path the source opener claims - an optical drive - counts as well.
     [[nodiscard]] static bool is_disc_image(const std::filesystem::path& path);
 
+    // How paths that are not files are opened: the front end's drive code.
+    // Set once at startup; until then every path is an image file.
+    static void set_source_opener(DiscSourceOpener opener);
+    // Whether a path is one the opener claims (an optical drive).
+    [[nodiscard]] static bool is_source_path(const std::filesystem::path& path);
+
     [[nodiscard]] bool open(const std::filesystem::path& image, std::string& error);
+    // A disc read through a source rather than files - what open() does for
+    // a path the opener claims, and what tests use with a source of their own.
+    [[nodiscard]] bool open(std::unique_ptr<DiscSource> source, std::string& error);
     void close();
+    // Read through a DiscSource (a drive) rather than from files.
+    [[nodiscard]] bool from_source() const noexcept { return source_ != nullptr; }
     [[nodiscard]] bool loaded() const noexcept { return !tracks_.empty(); }
 
     [[nodiscard]] int track_count() const noexcept { return static_cast<int>(tracks_.size()); }
@@ -107,6 +122,9 @@ class Disc {
     bool open_cue(const std::filesystem::path& cue, std::string& error);
     bool open_chd(const std::filesystem::path& image, std::string& error);
     bool open_single(const std::filesystem::path& image, std::string& error);
+    // The checks every way of opening ends with: the header read, and a
+    // refusal for anything that is not a Sega CD.
+    bool finish_open(std::string& error);
     // One 2448-byte frame out of the container, or false. The buffer is the
     // caller's; a CHD keeps one hunk of eight frames cached behind this.
     bool read_chd_frame(const Track& track, int lba, std::uint8_t* frame2448);
@@ -127,6 +145,8 @@ class Disc {
     // Set only for a .chd. Held by pointer so the header does not have to
     // pull the whole CHD reader in, and so a Disc stays movable.
     std::unique_ptr<mercury::core::Chd> chd_;
+    // Set only for a disc read through a DiscSource (an optical drive).
+    std::unique_ptr<DiscSource> source_;
 };
 
 // MSF <-> block conversions, shared by the drive and the tests. MSF values are

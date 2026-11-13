@@ -169,6 +169,14 @@ public:
 
     void write_data(std::uint8_t value) noexcept;
     void write_control(std::uint8_t value) noexcept;
+    // The 68000's running cycle count at the access about to be made. Set by
+    // the console before every read and write - only the TH release window
+    // below needs it.
+    void set_time(std::uint64_t cycles) noexcept { now_ = cycles; }
+    // How long a TH line RELEASED while low (made an input) still reads low
+    // to the pad, in 68000 cycles. Genesis Plus GX: 172 master clocks,
+    // "verified on MK-1650 model" - 172 / 7 rounded up.
+    static constexpr std::uint64_t kThReleaseLatency = 25;
 
     // The keyboard on this port, if one is plugged in. Held here rather than
     // as a separate device because it IS the controller: the game reaches it
@@ -182,6 +190,12 @@ public:
     }
     [[nodiscard]] std::uint8_t read_data() const noexcept;
     [[nodiscard]] std::uint8_t control() const noexcept { return control_; }
+    // Diagnostic: how many frames saw 0, 1, 2, 3 and 4+ TH rising edges - how
+    // often a game strobes the pad per frame. A game that strobes more than
+    // once is one a six-button pad's counter can catch out.
+    [[nodiscard]] const std::array<std::uint64_t, 5>& strobes_per_frame() const noexcept {
+        return strobes_per_frame_;
+    }
 
     // Called once per frame: the six-button counter times out after roughly
     // 1.5ms of no TH activity, which is what stops a game that only reads once
@@ -230,6 +244,11 @@ private:
     bool th_high_ = true;
     std::uint32_t th_edges_ = 0;
     std::uint32_t idle_frames_ = 0;
+    std::array<std::uint64_t, 5> strobes_per_frame_{};
+    // See kThReleaseLatency. Not in save states: the window is a few
+    // instructions long and states are taken between frames.
+    std::uint64_t now_ = 0;
+    std::uint64_t th_low_until_ = 0;
 };
 
 }  // namespace mercury::genesis

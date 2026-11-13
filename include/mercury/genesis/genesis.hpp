@@ -431,6 +431,11 @@ private:
     bool cd_32x_wanted_ = true;
     bool thirtytwox_plugged_ = true;
     bool cd_looked_for_32x_ = false;
+    // 68000 cycles since the machine was made, added at the end of every
+    // instruction. Only DIFFERENCES are used (the controller ports' TH release
+    // window - see ControllerPort::kThReleaseLatency), so it is not reset or
+    // saved: it only has to keep going up.
+    std::uint64_t io_clock_ = 0;
     // 68000 cycles run since the SH-2s last caught up, and the SH-2 cycles
     // still owed to them after the last slice overshot or fell short.
     std::uint32_t thirtytwox_quantum_ = 0;

@@ -1310,6 +1310,24 @@ int run_summary(const std::filesystem::path& rom, int frames, const std::filesys
         std::printf("cd32x: %s%s\n", machine.thirtytwox_plugged() ? "plugged in" : "unplugged",
                     machine.cd_looked_for_32x() ? ", the disc looked for one" : "");
     }
+    // How often the game strobes pad 1 per frame, and what it read back. More
+    // than one strobe a frame is where a six-button pad's counter matters.
+    {
+        const auto& p1 = machine.port1();
+        const auto& s = p1.strobes_per_frame();
+        std::printf("pad1 strobes/frame: 0:%llu 1:%llu 2:%llu 3:%llu 4+:%llu\n",
+                    (unsigned long long)s[0], (unsigned long long)s[1], (unsigned long long)s[2],
+                    (unsigned long long)s[3], (unsigned long long)s[4]);
+        for (int bank = 0; bank < 2; ++bank) {
+            std::printf("pad1 TH %s reads:", bank == 0 ? "high" : "low ");
+            for (int v = 0; v < 256; ++v) {
+                if (p1.read_log(bank)[v] != 0) {
+                    std::printf(" %02X:%llu", v, (unsigned long long)p1.read_log(bank)[v]);
+                }
+            }
+            std::printf("\n");
+        }
+    }
     // MERCURY_MEM_DUMP_DIR=<dir>: the 68000's work RAM as wram.bin and, for
     // a Sega CD, the sub CPU's program RAM and Word RAM as prg.bin / word.bin,
     // at the end of the run. For searching a game's own code for who writes

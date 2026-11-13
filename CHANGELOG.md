@@ -11,6 +11,12 @@
 
 ### Fixed
 
+- **Trouble Shooter and Decap Attack: the buttons now do what they should**
+  (issue #9). C was read as Start and B as A, and the real A and Start buttons
+  did nothing. Both games read A and Start a moment after letting go of the
+  controller's select line, before the line has risen on real hardware. GenX
+  treated the line as risen at once, and now waits for it the way a real
+  controller does.
 - **Sega CD 32X discs no longer show a black screen without the 32X BIOS.**
   With no 32X BIOS, GenX now runs a disc as on a Sega CD with no 32X. Discs
   that need one (Corpse Killer, Night Trap, Slam City, Supreme Warrior) show

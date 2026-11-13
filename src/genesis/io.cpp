@@ -19,6 +19,7 @@ void ControllerPort::reset() noexcept {
     th_high_ = true;
     th_edges_ = 0;
     idle_frames_ = 0;
+    th_low_until_ = 0;
     piano_.reset();
 }
 
@@ -62,6 +63,19 @@ void ControllerPort::write_data(std::uint8_t value) noexcept {
 void ControllerPort::update_th() noexcept {
     const bool th_is_output = (control_ & 0x40) != 0;
     const bool new_th = th_is_output ? ((data_ & 0x40) != 0) : true;
+    // A TH RELEASED WHILE LOW IS STILL LOW FOR A MOMENT. An input floats up,
+    // but not at once, and the pad goes on answering with its TH-low half
+    // until it has. Trouble Shooter depends on it: it drives TH low, makes it
+    // an input, waits two NOPs and reads A and Start. Treating the release as
+    // an instant rise handed it the TH-high half instead - B and C where A and
+    // Start belong - so C acted as Start and the real A and Start did nothing.
+    // Genesis Plus GX models the same window (172 master clocks, measured on
+    // a real pad) and only for this case: driving TH clears it.
+    if (th_is_output) {
+        th_low_until_ = 0;
+    } else if (new_th && !th_high_) {
+        th_low_until_ = now_ + kThReleaseLatency;
+    }
     if (new_th != th_high_) {
         // COUNT ON THE RISING EDGE, AND STOP AT FOUR.
         //
@@ -89,6 +103,7 @@ void ControllerPort::update_th() noexcept {
 }
 
 void ControllerPort::tick_timeout() noexcept {
+    ++strobes_per_frame_[th_edges_ < 4 ? th_edges_ : 4];
     // ~1.5ms is under a tenth of a frame, so any frame in which the pad was not
     // strobed is long enough to reset the sequence.
     if (++idle_frames_ >= 1) {
@@ -213,12 +228,14 @@ std::uint8_t ControllerPort::read_data() const noexcept {
     // Phase four answers like phase zero, which is what the mapping below does
     // by falling through.
     const std::uint32_t phase = (kind_ == Kind::pad6) ? th_edges_ : 0;
-    const auto value = bank_value(phase, th_high_);
+    // A TH just released from low still reads low - see update_th.
+    const bool th_high = th_high_ && !(th_low_until_ != 0 && now_ < th_low_until_);
+    const auto value = bank_value(phase, th_high);
     // Pins configured as outputs read back what the CPU last wrote to them.
     const auto result = static_cast<std::uint8_t>((data_ & control_) | (value & ~control_));
     // What the game actually receives, split by which bank it was reading. A
     // pad fault shows up here as a byte the hardware could never produce.
-    ++read_log_[th_high_ ? 0 : 1][result];
+    ++read_log_[th_high ? 0 : 1][result];
     ++reads_;
     return result;
 }

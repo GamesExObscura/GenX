@@ -1051,6 +1051,9 @@ std::uint8_t Genesis::read_io(std::uint32_t address) noexcept {
     // soft-reset combo and restarts itself forever.
     const auto reg = (address & 0x1F) | 1;
     std::uint8_t value = 0x00;
+    port1_.set_time(io_clock_);
+    port2_.set_time(io_clock_);
+    ext_.set_time(io_clock_);
     switch (reg) {
         case 0x01:
             // Version register: overseas/domestic + NTSC/PAL + "no Mega CD
@@ -1076,6 +1079,9 @@ void Genesis::write_io(std::uint32_t address, std::uint8_t value) noexcept {
     // A0 is not decoded on writes either - see read_io.
     const auto reg = (address & 0x1F) | 1;
     note_io(reg, value, true);
+    port1_.set_time(io_clock_);
+    port2_.set_time(io_clock_);
+    ext_.set_time(io_clock_);
     switch (reg) {
         case 0x03: port1_.write_data(value); return;
         case 0x05: port2_.write_data(value); return;
@@ -1159,6 +1165,7 @@ mercury::core::M68kStepResult Genesis::step() noexcept {
     // game's vblank budget come out the same as on hardware.
     const auto dma_stall_cycles = vdp_.take_pending_dma_cycles();
     result.cycles += dma_stall_cycles;
+    io_clock_ += result.cycles;
     // Level 2 belongs here as much as 6 and 4 do. Leaving it out meant a light
     // gun's external interrupt was raised and never retired, so the CPU took it
     // again on the very next instruction and the game stopped making progress -

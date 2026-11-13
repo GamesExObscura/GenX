@@ -177,6 +177,44 @@ int main() {
         std::printf("     left=0x%02X right=0x%02X\n", left, right);
     }
 
+    {
+        // A PAD, and a TH released while low. Trouble Shooter reads A and
+        // Start like this: drive TH low, make it an input, two NOPs, read. The
+        // pad goes on answering with its TH-low half for a moment after the
+        // release (Genesis Plus GX: 172 master clocks, measured on a pad), and
+        // the game reads well inside that. Treating the release as an instant
+        // rise gave it B and C instead, so C acted as Start.
+        ControllerPort port;  // a three-button pad
+        port.set_button(Button::a, true);
+        port.set_time(1000);
+        port.write_control(0x40);
+        port.write_data(0x00);  // TH driven low
+        port.set_time(1012);
+        port.write_control(0x00);  // released: TH is an input now
+        port.set_time(1032);  // two NOPs and the read
+        check_value(port.read_data(), 0x23, "released TH still reads the A/Start half");
+        port.set_time(1012 + ControllerPort::kThReleaseLatency);
+        check_value(port.read_data(), 0x7F, "and once it has floated up, the high half");
+
+        // Driving TH ends the window at once - the window is only the
+        // float-up of a released line.
+        port.set_time(2000);
+        port.write_control(0x40);
+        port.write_data(0x00);
+        port.set_time(2004);
+        port.write_control(0x00);
+        port.set_time(2008);
+        port.write_control(0x40);
+        port.write_data(0x40);  // driven high
+        port.set_time(2010);
+        check_value(port.read_data(), 0x7F, "TH driven high reads the high half at once");
+
+        // An input that was never driven low floats high from the start.
+        ControllerPort fresh;
+        fresh.set_time(50);
+        check_value(fresh.read_data(), 0x7F, "a TH never driven reads the high half");
+    }
+
     std::printf("\n%s\n", failures == 0 ? "all Justifier checks passed" : "FAILURES");
     return failures == 0 ? 0 : 1;
 }

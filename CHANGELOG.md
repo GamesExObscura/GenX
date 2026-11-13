@@ -17,6 +17,11 @@
   controller's select line, before the line has risen on real hardware. GenX
   treated the line as risen at once, and now waits for it the way a real
   controller does.
+- **Combat Cars: no more ghost image in two-player mode** (issue #19). The
+  game times its split screen by watching the TV line it's on. In its
+  high-resolution two-player mode, the console reports that line in a
+  different form, and GenX didn't. The split happened in the wrong place on
+  every other frame, so two different pictures were laid over each other.
 - **ESPN Sunday Night NFL no longer freezes at the coin toss** (issue #13).
   GenX always plugged a controller into port 2, even when player 2 had no
   buttons set. The game then gave the away team to a second player and

@@ -548,6 +548,20 @@ std::uint16_t Vdp::read_hv_counter() noexcept {
     if (h >= visible) {
         h += wide_mode() ? (0xE4u - 0xB7u) : (0xE9u - 0x94u);
     }
+    // INTERLACE MODE 2 DOUBLES THE V COUNTER: the line number shifted left
+    // one, with the bit shifted out coming back in at bit 0 - an 8-bit
+    // rotate. Combat Cars (issue #19) times its two-player split by polling
+    // for it, and does the rotate itself (rol.b #1 of the line, then cmp.b
+    // with $C00008). Reporting the plain line made it switch the bottom
+    // player's scroll at line 208 instead of 104, and only in every other
+    // field - so the two woven fields held two different pictures, the
+    // "ghost image". Genesis Plus GX does the same and names Combat Cars and
+    // Sonic 2. Interlace mode 1 (bit 0 replaced by bit 8 there) is left
+    // alone until a game shows it matters.
+    if (interlace_double()) {
+        const std::uint32_t low = v & 0xFFu;
+        v = ((low << 1) | (low >> 7)) & 0xFFu;
+    }
     // Which V values a polling game actually sees. A wait loop that never
     // observes its target value falls through and the game stops being locked
     // to the frame, which shows up as a raster effect drifting up the screen.

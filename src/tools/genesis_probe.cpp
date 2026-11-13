@@ -3092,6 +3092,27 @@ int main(int argc, char** argv) {
                   [](const auto& a, const auto& b) { return a.first < b.first; });
         std::printf("input script: %zu steps\n", dump_script.size());
     }
+    // MERCURY_INPUT_SCRIPT2: the same format for the pad in port 2, for the
+    // menus a two-player mode will not leave until player 2 has chosen too.
+    std::vector<std::pair<int, std::string>> dump_script2;
+    if (const char* e = std::getenv("MERCURY_INPUT_SCRIPT2")) {
+        std::string text(e);
+        std::size_t pos = 0;
+        while (pos < text.size()) {
+            const auto comma = text.find(',', pos);
+            const auto piece = text.substr(pos, comma == std::string::npos ? comma : comma - pos);
+            const auto colon = piece.find(':');
+            if (colon != std::string::npos) {
+                dump_script2.emplace_back(std::atoi(piece.substr(0, colon).c_str()),
+                                          piece.substr(colon + 1));
+            }
+            if (comma == std::string::npos) break;
+            pos = comma + 1;
+        }
+        std::sort(dump_script2.begin(), dump_script2.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+        std::printf("port 2 input script: %zu steps\n", dump_script2.size());
+    }
 
     // The summary mode's MERCURY_M68K_TRACE, for this loop too, but only with
     // MERCURY_M68K_TRACE_FRAMES: this is the loop that dumps pictures, so it is
@@ -3159,6 +3180,33 @@ int main(int argc, char** argv) {
                 }
             }
         }
+        if (!dump_script2.empty()) {
+            using mercury::genesis::Button;
+            const std::string* active = nullptr;
+            for (const auto& step : dump_script2) {
+                if (frame >= step.first) active = &step.second; else break;
+            }
+            auto& pad = machine.port2();
+            for (const auto b : {Button::up, Button::down, Button::left, Button::right,
+                                 Button::a, Button::b, Button::c, Button::start}) {
+                pad.set_button(b, false);
+            }
+            if (active != nullptr) {
+                for (const char ch : *active) {
+                    switch (ch) {
+                        case 'u': pad.set_button(Button::up, true); break;
+                        case 'd': pad.set_button(Button::down, true); break;
+                        case 'l': pad.set_button(Button::left, true); break;
+                        case 'r': pad.set_button(Button::right, true); break;
+                        case 'a': pad.set_button(Button::a, true); break;
+                        case 'b': pad.set_button(Button::b, true); break;
+                        case 'c': pad.set_button(Button::c, true); break;
+                        case 's': pad.set_button(Button::start, true); break;
+                        default: break;
+                    }
+                }
+            }
+        }
         const auto cycles = machine.run_frame();
         // MERCURY_CTRL_WATCH names a control-port word; these are the addresses
         // that wrote it. A register whose value alternates was written by code
@@ -3206,6 +3254,25 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "\n" << machine.describe() << "\n\n" << machine.ym2612().describe() << "\n";
+    // Which V counter values the game read, and from where. A raster effect
+    // timed by polling the counter instead of a line interrupt lands wherever
+    // the counter says it should - so the values seen are the evidence.
+    {
+        const auto& hv = machine.vdp().hv_v_histogram();
+        std::vector<std::pair<std::uint64_t, int>> top;
+        for (int i = 0; i < 256; ++i) if (hv[i] != 0) top.push_back({hv[i], i});
+        std::sort(top.rbegin(), top.rend());
+        std::printf("HV counter reads: %llu; V values most read:",
+                    static_cast<unsigned long long>(machine.vdp_hv_reads()));
+        for (std::size_t i = 0; i < top.size() && i < 12; ++i) {
+            std::printf(" %02X:%llu", top[i].second, static_cast<unsigned long long>(top[i].first));
+        }
+        std::printf("\nHV counter readers (pc x count):");
+        for (const auto& e : machine.hv_reader_pcs()) {
+            if (e.second != 0) std::printf(" %06X x%llu", e.first, static_cast<unsigned long long>(e.second));
+        }
+        std::printf("\n");
+    }
 
     // Audio health. A silent game is nearly always one of: the Z80 never ran,
     // the Z80 wedged on an opcode, the driver never got its vblank interrupt,

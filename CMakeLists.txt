@@ -326,6 +326,14 @@ target_link_libraries(justifier_tests PRIVATE mercury)
 
 add_test(NAME justifier_tests COMMAND justifier_tests)
 
+add_executable(vdp_counter_tests
+    src/tests/vdp_counter_tests.cpp
+)
+
+target_link_libraries(vdp_counter_tests PRIVATE mercury)
+
+add_test(NAME vdp_counter_tests COMMAND vdp_counter_tests)
+
 add_executable(chd_probe
     src/tools/chd_probe.cpp
 )

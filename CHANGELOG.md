@@ -17,6 +17,12 @@
   controller's select line, before the line has risen on real hardware. GenX
   treated the line as risen at once, and now waits for it the way a real
   controller does.
+- **Toy Story: no more stray line across the floor** (issue #21). A one-pixel
+  strip near the bottom of the screen slid against the background. The game
+  switches the floor's scrolling partway down the screen, and on real hardware
+  the line where it switches still scrolls the old way. GenX switched that line
+  too early and read a leftover value for it. Burning Force and Deadly Moves
+  switch the same way and now match the hardware on that line too.
 - **Combat Cars: no more ghost image in two-player mode** (issue #19). The
   game times its split screen by watching the TV line it's on. In its
   high-resolution two-player mode, the console reports that line in a

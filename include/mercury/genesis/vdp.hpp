@@ -483,6 +483,14 @@ private:
     // Full-screen vertical scroll (planes A and B) as sampled in the blank
     // before the line being drawn. See advance_cycles.
     std::array<std::uint16_t, 2> vscroll_latch_{};
+    // WHERE the current line's horizontal scroll comes from - register 11's
+    // mode bits and register 13's table address - as they stood when the line
+    // began. The chip fetches the line's scroll in the blank before it, ahead
+    // of any H-interrupt handler. Not saved: a state is restored between
+    // lines' worth of work and taken from the registers then (see
+    // derive_raster_samples). See horizontal_scroll.
+    std::uint8_t hscroll_mode_latch_ = 0;
+    std::uint8_t hscroll_base_latch_ = 0;
     std::uint32_t frames_elapsed_ = 0;
     // Counts down once per active line and fires the H interrupt at zero, then
     // reloads from register 10. Same reload-value rule as the Master System's

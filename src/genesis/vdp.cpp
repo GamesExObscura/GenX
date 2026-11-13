@@ -184,6 +184,8 @@ void Vdp::reset() noexcept {
     cycles_into_line_ = 0;
     line_rendered_ = false;
     vscroll_latch_.fill(0);
+    hscroll_mode_latch_ = 0;
+    hscroll_base_latch_ = 0;
     frames_elapsed_ = 0;
     line_counter_ = 0;
     vertical_interrupt_pending_ = false;
@@ -957,6 +959,11 @@ void Vdp::sanitize_loaded() noexcept {
     if (vint_assert_delay_ > kVintAssertDelayCycles || vint_assert_delay_ < 0) {
         vint_assert_delay_ = 0;
     }
+    // Where this line's horizontal scroll comes from is not saved; it is what
+    // the registers say now. States are taken as a frame completes, which is
+    // the very moment advance_cycles takes it anyway.
+    hscroll_mode_latch_ = static_cast<std::uint8_t>(registers_[kRegModeSet3] & 0x03);
+    hscroll_base_latch_ = static_cast<std::uint8_t>(registers_[kRegHScrollBase] & 0x3F);
 }
 
 void Vdp::derive_raster_samples() noexcept {
@@ -967,6 +974,8 @@ void Vdp::derive_raster_samples() noexcept {
     line_rendered_ = hblank_timing() && cycles_into_line_ >= kHblankStartCycle;
     vscroll_latch_[0] = vsram_[0];
     vscroll_latch_[1] = vsram_[1];
+    hscroll_mode_latch_ = static_cast<std::uint8_t>(registers_[kRegModeSet3] & 0x03);
+    hscroll_base_latch_ = static_cast<std::uint8_t>(registers_[kRegHScrollBase] & 0x3F);
 }
 
 bool Vdp::advance_cycles(std::uint32_t m68k_cycles) noexcept {
@@ -1125,6 +1134,18 @@ bool Vdp::advance_cycles(std::uint32_t m68k_cycles) noexcept {
             frame_completed = true;
             begin_frame();
         }
+        // The new line's horizontal scroll SOURCE, taken now, before the CPU
+        // runs any of it - in particular before an H-interrupt handler raised
+        // at this boundary. Toy Story (issue #21) switches register 11 from
+        // whole-screen to per-line scroll in the handler for line 174; the
+        // chip has already fetched line 174's scroll the old way by then, and
+        // the per-line table only starts at 175. Taking the mode when the line
+        // was drawn gave line 174 an unused table entry - a one-pixel strip of
+        // background that slid against the rest. Only WHERE the scroll comes
+        // from is taken here; the values themselves are still read when the
+        // line is drawn, as every other game has been tuned against.
+        hscroll_mode_latch_ = static_cast<std::uint8_t>(registers_[kRegModeSet3] & 0x03);
+        hscroll_base_latch_ = static_cast<std::uint8_t>(registers_[kRegHScrollBase] & 0x3F);
         // A long step can carry past the next line's blank as well.
         render_if_due();
     }
@@ -1160,9 +1181,10 @@ void Vdp::unpack_color(std::uint16_t entry, std::uint8_t* rgb) noexcept {
 }
 
 std::uint16_t Vdp::horizontal_scroll(std::uint32_t line, bool plane_b) const noexcept {
-    const std::uint32_t base = static_cast<std::uint32_t>(registers_[kRegHScrollBase] & 0x3F) << 10;
+    // Mode and table as they were when the line began - see advance_cycles.
+    const std::uint32_t base = static_cast<std::uint32_t>(hscroll_base_latch_) << 10;
     std::uint32_t offset = 0;
-    switch (registers_[kRegModeSet3] & 0x03) {
+    switch (hscroll_mode_latch_) {
         case 0x00: offset = 0; break;                       // whole screen
         case 0x01: offset = (line & 0x07) * 4; break;       // prohibited; first cell row
         case 0x02: offset = (line & ~0x07u) * 4; break;     // per cell row

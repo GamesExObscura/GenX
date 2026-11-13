@@ -608,6 +608,22 @@ void Vdp::write_data(std::uint16_t value) noexcept {
         dma_fill(value);
         return;
     }
+    // ONLY A WRITE COMMAND WRITES. Codes 1, 3 and 5 are the VRAM, CRAM and
+    // VSRAM writes; under any other code - the read commands above all - a
+    // data-port write stores nothing, though the address still advances.
+    // target_of maps the read codes to their memories too, because reads need
+    // that, and this used to go through it, so a write under a READ command
+    // landed in memory. OutRunners (issue #23) is the case: its per-line
+    // H-interrupt handler takes the next CRAM command from a table and, on
+    // the line past the table's end, picks up 0000 - a VRAM READ of address 0
+    // - and then writes its sky colour. That colour went into tile 0, which
+    // the sky is made of: one white dot per tile. Genesis Plus GX ignores the
+    // write the same way.
+    if (const auto code = command_code_ & 0x0F; code != 0x01 && code != 0x03 && code != 0x05) {
+        ++invalid_write_count_;
+        advance_address();
+        return;
+    }
     switch (target_of(command_code_)) {
         case Target::vram: {
             // A word write to an odd VRAM address stores the halves swapped.

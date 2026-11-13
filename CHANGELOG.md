@@ -17,6 +17,13 @@
   controller's select line, before the line has risen on real hardware. GenX
   treated the line as risen at once, and now waits for it the way a real
   controller does.
+- **OutRunners: no more white dots in the sky** (issue #23). Every line, the
+  game sends the next sky colour to the video chip. On the line after its
+  colour list ends, it sends a "read" command and then writes anyway. Real
+  hardware ignores that write. GenX stored it in the graphics the sky is
+  built from, which put one dot in every 8×8 block of sky. GenX now ignores
+  it too. This also removes a stray brown square from the top-left corner of
+  Mad Dog II's menu (Sega CD).
 - **Toy Story: no more stray line across the floor** (issue #21). A one-pixel
   strip near the bottom of the screen slid against the background. The game
   switches the floor's scrolling partway down the screen, and on real hardware

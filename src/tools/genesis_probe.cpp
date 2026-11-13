@@ -3254,6 +3254,30 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "\n" << machine.describe() << "\n\n" << machine.ym2612().describe() << "\n";
+    // MERCURY_MEM_DUMP_DIR=<dir> here too: the VDP's memory and registers as
+    // they stand after the last frame - vram.bin (64KB), regs.bin (24 bytes).
+    // A wrong pixel is a wrong name-table entry or a wrong tile byte, and these
+    // say which without guessing from the picture.
+    if (const char* dir = std::getenv("MERCURY_MEM_DUMP_DIR"); dir != nullptr && *dir != '\0') {
+        const std::filesystem::path out(dir);
+        std::filesystem::create_directories(out);
+        const auto& vram = machine.vdp().vram();
+        std::ofstream(out / "vram.bin", std::ios::binary)
+            .write(reinterpret_cast<const char*>(vram.data()), static_cast<std::streamsize>(vram.size()));
+        const auto& regs = machine.vdp().registers();
+        std::ofstream(out / "regs.bin", std::ios::binary)
+            .write(reinterpret_cast<const char*>(regs.data()), static_cast<std::streamsize>(regs.size()));
+        // And the 68000's work RAM, for code a game runs from there.
+        std::vector<std::uint8_t> wram(0x10000);
+        for (std::uint32_t i = 0; i < 0x10000; i += 2) {
+            const std::uint16_t w = machine.read16(0xFF0000 + i);
+            wram[i] = static_cast<std::uint8_t>(w >> 8);
+            wram[i + 1] = static_cast<std::uint8_t>(w);
+        }
+        std::ofstream(out / "wram.bin", std::ios::binary)
+            .write(reinterpret_cast<const char*>(wram.data()), static_cast<std::streamsize>(wram.size()));
+        std::printf("VDP memory and work RAM written to %s\n", dir);
+    }
     // Which V counter values the game read, and from where. A raster effect
     // timed by polling the counter instead of a line interrupt lands wherever
     // the counter says it should - so the values seen are the evidence.

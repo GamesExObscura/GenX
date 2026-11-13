@@ -79,6 +79,27 @@ int main() {
                     "the next line takes its own entry");
     }
 
+    // A DATA-PORT WRITE UNDER A READ COMMAND STORES NOTHING. OutRunners'
+    // H-interrupt handler runs one line past its table, picks up the command
+    // 0000 0000 (read VRAM at 0) and writes a colour; that colour used to land
+    // in tile 0, the sky's tile - a white dot in every tile.
+    {
+        using mercury::genesis::Vdp;
+        Vdp vdp;
+        vdp.reset();
+        vdp.write_control(0x8104);  // mode 5
+        vdp.write_control(0x8F02);  // auto-increment 2
+        vdp.write_control(0x0000);  // VRAM read, address 0
+        vdp.write_control(0x0000);
+        vdp.write_data(0x00A0);
+        check_value(vdp.vram()[1], 0x00, "a write under a VRAM read command is dropped");
+        // The same write under a write command does land.
+        vdp.write_control(0x4000);  // VRAM write, address 0
+        vdp.write_control(0x0000);
+        vdp.write_data(0x00A0);
+        check_value(vdp.vram()[1], 0xA0, "a write under a VRAM write command lands");
+    }
+
     std::printf("\n%s\n", failures == 0 ? "all V counter checks passed" : "FAILURES");
     return failures == 0 ? 0 : 1;
 }

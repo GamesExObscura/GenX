@@ -17,6 +17,13 @@
   controller's select line, before the line has risen on real hardware. GenX
   treated the line as risen at once, and now waits for it the way a real
   controller does.
+- **ESPN Sunday Night NFL no longer freezes at the coin toss** (issue #13).
+  GenX always plugged a controller into port 2, even when player 2 had no
+  buttons set. The game then gave the away team to a second player and
+  waited for that player to call heads or tails. Port 2 is now empty unless
+  player 2 has a controller or at least one button set in **Configure →
+  Input**, as on a console with one controller. The computer then plays the
+  away team and calls the toss.
 - **Sega CD 32X discs no longer show a black screen without the 32X BIOS.**
   With no 32X BIOS, GenX now runs a disc as on a Sega CD with no 32X. Discs
   that need one (Corpse Killer, Night Trap, Slam City, Supreme Warrior) show

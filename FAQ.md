@@ -154,6 +154,14 @@ then choose **File → Open ROM → Sega CD from drive** and pick the drive.
 5. **Save as…** keeps the setup as a profile, so you can switch back to it
    later.
 
+### A game thinks there's a second player
+
+Port 2 has a controller only when player 2 has one. Player 2 needs a gamepad
+selected, or at least one button set on the keyboard. Otherwise GenX leaves
+port 2 empty, like a console with one controller, and sports games give the
+other team to the computer. If a game waits for player 2, check the player 2
+settings in **Configure → Input**.
+
 ### My controller isn't detected, or it stopped responding
 
 - **Check the status line.** Under the controller picture, the Input tab shows

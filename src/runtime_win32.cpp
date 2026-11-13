@@ -1839,8 +1839,39 @@ mercury::genesis::ControllerPort::Kind port_kind_of(PadKind kind) {
 
 void apply_port_kinds_for(RuntimeState& state, PadKind first, PadKind second);
 
+// Whether player 2 can press anything on a PAD on this computer: a gamepad or
+// the mouse, or at least one pad button bound to a key. Player 2 starts out as
+// a keyboard with no pad keys at all - see set_default_input. The light-gun
+// rows (trigger, reload) are bound to the mouse by default and do not count:
+// they say nothing about a pad.
+bool player_two_connected(const RuntimeState& state) {
+    const auto& p2 = state.players[1];
+    if (p2.device != InputDevice::keyboard) {
+        return true;
+    }
+    for (int i = 0; i < kPadButtonCount; ++i) {
+        const auto button = static_cast<PadButton>(i);
+        if (button != PadButton::gun_trigger && button != PadButton::gun_reload && p2.keys[i] != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void apply_port_kinds(RuntimeState& state) {
     apply_port_kinds_for(state, state.players[0].kind, state.players[1].kind);
+    // A PAD NOBODY CAN PRESS IS WORSE THAN NO PAD. Games count the pads they
+    // find, and a second one means a second human. ESPN Sunday Night NFL
+    // (issue #13) then made player 2 the away team and waited at the coin
+    // toss for player 2 to call it - with nothing bound to player 2, for ever.
+    // With port 2 empty it gives the away team to the computer, as it does on
+    // a console with one controller. Netplay seats a real person in port 2 and
+    // goes through apply_port_kinds_for, so it is untouched.
+    using Kind = mercury::genesis::ControllerPort::Kind;
+    const auto second = state.genesis.port2().kind();
+    if ((second == Kind::pad3 || second == Kind::pad6) && !player_two_connected(state)) {
+        state.genesis.port2().set_kind(Kind::none);
+    }
 }
 
 // The two seats' devices, onto the two ports. Normally this computer's own

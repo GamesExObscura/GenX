@@ -608,6 +608,10 @@ int run_summary(const std::filesystem::path& rom, int frames, const std::filesys
     if (const char* e = std::getenv("MERCURY_PAD6"); e != nullptr && e[0] != '0') {
         machine.port1().set_kind(mercury::genesis::ControllerPort::Kind::pad6);
     }
+    // MERCURY_PORT2=none: an empty port 2 - see the dump loop.
+    if (const char* e = std::getenv("MERCURY_PORT2"); e != nullptr && std::string(e) == "none") {
+        machine.port2().set_kind(mercury::genesis::ControllerPort::Kind::none);
+    }
     const int hold_from = [] {
         const char* e = std::getenv("MERCURY_HOLD_FROM");
         return e == nullptr ? 0 : std::atoi(e);
@@ -3060,6 +3064,12 @@ int main(int argc, char** argv) {
     if (const char* e = std::getenv("MERCURY_PAD6"); e != nullptr && *e != '0') {
         machine.port1().set_kind(mercury::genesis::ControllerPort::Kind::pad6);
         std::printf("port 1: six-button pad\n");
+    }
+    // MERCURY_PORT2=none: nothing plugged into port 2, the way a one-player
+    // console is usually set up. Some games count the pads they find.
+    if (const char* e = std::getenv("MERCURY_PORT2"); e != nullptr && std::string(e) == "none") {
+        machine.port2().set_kind(mercury::genesis::ControllerPort::Kind::none);
+        std::printf("port 2: empty\n");
     }
     // Same MERCURY_INPUT_SCRIPT as the summary mode: this is the loop that dumps
     // frames, so it is the one that has to be able to walk a menu.

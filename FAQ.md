@@ -87,9 +87,32 @@ Go through these in order:
 
 ### Sega CD 32X games won't start
 
-Sega CD 32X discs include Night Trap, Corpse Killer, Supreme Warrior and
-Fahrenheit. Some of them need the real 32X BIOS as well as the Sega CD BIOS.
-Set both folders in **Configure → BIOS**.
+Sega CD 32X discs include Night Trap, Corpse Killer, Supreme Warrior, Slam
+City and Fahrenheit's second disc. They need the real 32X BIOS as well as the
+Sega CD BIOS. Set both folders in **Configure → BIOS**. Without the 32X BIOS,
+GenX runs the disc on a Sega CD with no 32X, and the game shows its own "this
+game requires a 32X" message.
+
+### Fahrenheit or Surgical Strike asks for the 32X disc
+
+Some Sega CD discs check for a 32X. If they find one, they ask for their 32X
+disc instead of playing:
+- Fahrenheit's first disc says "Please press Start and insert disc 2".
+- Surgical Strike asks which version you want.
+
+To play the Sega CD version, untick **Sega CD → 32X plugged in**. The game
+restarts as it would on a Sega CD with no 32X attached. This happens
+automatically when GenX has no 32X BIOS.
+
+You don't need a ROM hack for this. If you do use the Fahrenheit hack from
+romhacking.net, apply it at the offset for your file type:
+- `0x796` for a `.bin` from a `.bin`/`.cue` set.
+- `0x786` for an `.iso`.
+
+Patching a `.bin` at `0x786` damages the disc's security code. The BIOS then
+treats the disc as a music CD and opens the CD player. A real Sega CD does the
+same. That hack is written for Fahrenheit only; Surgical Strike's code at
+those offsets is different.
 
 ### What file types can I open?
 

@@ -51,6 +51,18 @@ public:
     [[nodiscard]] LoadResult load_cd(const std::filesystem::path& disc,
                                      const std::vector<std::uint8_t>& bios);
     [[nodiscard]] bool cd_mode() const noexcept { return cd_mode_; }
+    // Whether a 32X sits on the console. It always does for a cartridge. For
+    // a disc it is the player's choice (set_cd_32x, default yes) AND it needs
+    // the real 32X BIOS, because a disc has no header to synthesise the 32X's
+    // startup from - see load_cd. Unplugged, the 68000 finds no 32X at all,
+    // which is how a Sega CD on its own looks: Fahrenheit's first disc then
+    // plays its Sega CD version instead of asking for the 32X disc.
+    // Takes effect at the next load or reset().
+    void set_cd_32x(bool wanted) noexcept;
+    [[nodiscard]] bool cd_32x_wanted() const noexcept { return cd_32x_wanted_; }
+    [[nodiscard]] bool thirtytwox_plugged() const noexcept { return thirtytwox_plugged_; }
+    // A disc that looked for a 32X while none was plugged in. Cleared by a load.
+    [[nodiscard]] bool cd_looked_for_32x() const noexcept { return cd_looked_for_32x_; }
     [[nodiscard]] mercury::segacd::SegaCd& segacd() noexcept { return *segacd_; }
     [[nodiscard]] const mercury::segacd::SegaCd& segacd() const noexcept { return *segacd_; }
     void reset() noexcept;
@@ -414,6 +426,11 @@ private:
     // access pays one boolean test for it.
     std::unique_ptr<mercury::segacd::SegaCd> segacd_;
     bool cd_mode_ = false;
+    // See set_cd_32x. Not in save states, like domestic_: they follow from the
+    // BIOS files and a setting, and a state is restored onto the same ones.
+    bool cd_32x_wanted_ = true;
+    bool thirtytwox_plugged_ = true;
+    bool cd_looked_for_32x_ = false;
     // 68000 cycles run since the SH-2s last caught up, and the SH-2 cycles
     // still owed to them after the last slice overshot or fell short.
     std::uint32_t thirtytwox_quantum_ = 0;

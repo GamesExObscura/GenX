@@ -13,8 +13,10 @@
 #include "mercury/thirtytwox/thirtytwox.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -892,6 +894,83 @@ void test_the_configured_folder_is_searched_first() {
     fs::remove_all(root, ignored);
 }
 
+// --- a Sega CD with the 32X unplugged ---------------------------------------
+//
+// A disc finds a 32X exactly as a cartridge does - the "MARS" signature and the
+// adapter's registers - so unplugged, all of that has to read as nothing and no
+// write may switch it on. Only then do Fahrenheit's first disc and Surgical
+// Strike play their Sega CD versions instead of asking for the 32X disc, and
+// the 32X-only discs say "requires a 32X" instead of showing a black screen.
+
+void test_a_disc_with_no_32x_bios_finds_no_32x() {
+    std::printf("a disc with no 32X BIOS runs on a Sega CD alone\n");
+    if (std::getenv("MERCURY_32X_BIOS") != nullptr) {
+        std::printf("  skipped: MERCURY_32X_BIOS is set, so a 32X BIOS would be found\n");
+        return;
+    }
+    auto machine = std::make_unique<mercury::genesis::Genesis>();
+    const std::vector<std::uint8_t> bios(0x20000, 0);
+    check(machine->load_cd({}, bios).loaded, "the Sega CD BIOS loads with no disc");
+    check(!machine->thirtytwox_plugged(), "no 32X BIOS: the 32X is unplugged");
+    check(!machine->cd_looked_for_32x(), "nothing has looked for it yet");
+    check(machine->read16(0xA130EC) != 0x4D41, "no MARS signature");
+    check(machine->read8(0xA130EF) != 'S', "not even a byte of it");
+    check(machine->cd_looked_for_32x(), "and the look is remembered for the shell");
+    machine->write16(0xA15100, mercury::thirtytwox::Adapter::kAden);
+    check(!machine->thirtytwox().adapter().enabled(), "a write cannot switch it on");
+    machine->write16(0xA15120, 0xC0DE);
+    check(machine->read16(0xA15120) != 0xC0DE, "the communication port is not there");
+    machine->reset();
+    check(!machine->cd_looked_for_32x(), "a power cycle starts the look over");
+}
+
+void test_the_player_can_unplug_the_32x_from_a_disc() {
+    std::printf("with the 32X BIOS a disc has the 32X, until the player unplugs it\n");
+    namespace fs = std::filesystem;
+    std::error_code ignored;
+    const auto folder = fs::temp_directory_path(ignored) / "genx_cd32x_test";
+    fs::remove_all(folder, ignored);
+    fs::create_directories(folder, ignored);
+    const auto write = [](const fs::path& at, std::size_t size) {
+        std::ofstream out(at, std::ios::binary);
+        const std::vector<char> bytes(size, '\x33');
+        out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    };
+    write(folder / "page", 0x100);
+    write(folder / "master", 0x800);
+    write(folder / "slave", 0x400);
+
+    auto machine = std::make_unique<mercury::genesis::Genesis>();
+    machine->thirtytwox().set_bios_folder(folder);
+    const std::vector<std::uint8_t> bios(0x20000, 0);
+    check(machine->load_cd({}, bios).loaded, "the Sega CD BIOS loads with no disc");
+    check(machine->cd_32x_wanted(), "plugged in is the default");
+    check(machine->thirtytwox_plugged(), "with the 32X BIOS the 32X is there");
+    check_eq(machine->read16(0xA130EC), 0x4D41, "and answers MARS");
+
+    machine->set_cd_32x(false);
+    machine->reset();
+    check(!machine->thirtytwox_plugged(), "switched off, it is unplugged");
+    check(machine->read16(0xA130EC) != 0x4D41, "and the signature is gone");
+    machine->write16(0xA15100, mercury::thirtytwox::Adapter::kAden);
+    check(!machine->thirtytwox().adapter().enabled(), "and it cannot be switched on");
+
+    machine->set_cd_32x(true);
+    machine->reset();
+    check(machine->thirtytwox_plugged(), "switched back on, it is there again");
+    check_eq(machine->read16(0xA130EC), 0x4D41, "MARS and all");
+    fs::remove_all(folder, ignored);
+}
+
+void test_a_cartridge_always_has_the_32x() {
+    std::printf("the Sega CD switch never touches a cartridge\n");
+    auto machine = std::make_unique<mercury::genesis::Genesis>();
+    machine->set_cd_32x(false);
+    check(machine->thirtytwox_plugged(), "a cartridge machine keeps its 32X");
+    check_eq(machine->read16(0xA130EC), 0x4D41, "so a 32X cartridge still finds it");
+    check(!machine->cd_looked_for_32x(), "and nothing is reported");
+}
+
 }  // namespace
 
 int main() {
@@ -933,6 +1012,9 @@ int main() {
     test_pwm_outputs_off_are_silent();
     test_a_bios_folder_is_recognised_by_file_size();
     test_the_configured_folder_is_searched_first();
+    test_a_disc_with_no_32x_bios_finds_no_32x();
+    test_the_player_can_unplug_the_32x_from_a_disc();
+    test_a_cartridge_always_has_the_32x();
 
     std::printf("\n%d checks, %d failed\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

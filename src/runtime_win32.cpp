@@ -526,6 +526,9 @@ struct RuntimeState {
     // is still out.
     bool check_for_updates = true;
     bool update_check_running = false;
+    // Sega CD > 32X plugged in. Off runs every disc on a Sega CD alone - see
+    // Genesis::set_cd_32x. With no 32X BIOS it is unplugged regardless.
+    bool cd_32x = true;
     int view_scale = 0;  // 0 = the per-machine default
     Aspect aspect = Aspect::stretch;
     int custom_aspect_width = 16;
@@ -2627,6 +2630,14 @@ mercury::net::Hooks netplay_hooks(RuntimeState& state) {
                 hash ^= static_cast<std::uint8_t>(media >> (i * 8));
                 hash *= 1099511628211ULL;
             }
+            // And whether a disc runs with the 32X unplugged (Sega CD menu, or
+            // no 32X BIOS): Fahrenheit's first disc is a different game either
+            // way. Folded in only when unplugged, so every other fingerprint
+            // stays what it was. Kept out of media_id, which states carry.
+            if (state.genesis.cd_mode() && !state.genesis.thirtytwox_plugged()) {
+                hash ^= 0x4E4F333258202020ULL;  // "NO32X   "
+                hash *= 1099511628211ULL;
+            }
         }
         return hash;
     };
@@ -3374,15 +3385,22 @@ void step_until_next_frame_genesis(RuntimeState& state) {
     // header; a disc has no such header, so the real firmware is the only way
     // in and without it the SH-2s never run. The disc looks broken.
     //
-    // There is no way to know a disc is one of those before it says so, and
-    // it says so by switching the adapter on. That is the moment to speak,
-    // and only once - the flag is cleared when a game is loaded.
+    // There is no way to know a disc is one of those before it says so. With
+    // no firmware the 32X is unplugged (Genesis::load_cd), so the disc finds
+    // none and says so on screen in its own words - and the moment it looked
+    // is the moment to say why. Only once; the flag is cleared when a game is
+    // loaded. Fahrenheit's first disc and Surgical Strike look too, and then
+    // simply play their Sega CD versions, which is why it is worded as it is.
     if (!state.warned_no_32x_bios && state.genesis.cd_mode() &&
-        state.genesis.thirtytwox().adapter().enabled() &&
-        !state.genesis.thirtytwox().bios_loaded()) {
+        state.genesis.cd_looked_for_32x()) {
         state.warned_no_32x_bios = true;
-        set_status(state, L"This disc uses the 32X, and no 32X firmware was found - "
-                          L"set its folder on the BIOS tab in Configure.");
+        if (!state.cd_32x) {
+            set_status(state, L"This disc looked for a 32X - it is unplugged (Sega CD menu), "
+                              L"so it runs as on a Sega CD alone.");
+        } else {
+            set_status(state, L"This disc looked for a 32X, and no 32X firmware was found, so it "
+                              L"runs as on a Sega CD alone - set the 32X folder on the BIOS tab.");
+        }
     }
     state.last_presented_frame = state.genesis.vdp().frames_elapsed();
     update_framebuffer(state);
@@ -4097,6 +4115,8 @@ void load_settings(RuntimeState& state) {
             state.hide_cursor = value != "0";
         } else if (key == "check_for_updates") {
             state.check_for_updates = value != "0";
+        } else if (key == "cd_32x") {
+            state.cd_32x = value != "0";
         } else if (key == "view_scale") {
             const int scale = std::atoi(value.c_str());
             if (scale >= 0 && scale <= 4) {
@@ -4274,6 +4294,7 @@ void save_settings(const RuntimeState& state) {
     out << "dark_theme=" << (state.dark_theme ? 1 : 0) << "\n";
     out << "hide_cursor=" << (state.hide_cursor ? 1 : 0) << "\n";
     out << "check_for_updates=" << (state.check_for_updates ? 1 : 0) << "\n";
+    out << "cd_32x=" << (state.cd_32x ? 1 : 0) << "\n";
     out << "view_scale=" << state.view_scale << "\n";
     out << "aspect=" << static_cast<int>(state.aspect) << "\n";
     out << "custom_aspect_width=" << state.custom_aspect_width << "\n";
@@ -4989,6 +5010,8 @@ HMENU build_menu(RuntimeState& state) {
     AppendMenuW(disc, MF_POPUP, reinterpret_cast<UINT_PTR>(state.swap_drive_menu),
                 L"Swap to disc in d&rive");
     AppendMenuW(disc, MF_STRING, IDM_CD_BOOT, L"&Boot Sega CD");
+    AppendMenuW(disc, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(disc, MF_STRING, IDM_CD_32X, L"&32X plugged in");
     AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(disc), L"Sega C&D");
 
     HMENU cheats = CreatePopupMenu();
@@ -5358,6 +5381,11 @@ void sync_menu_state(const RuntimeState& state) {
     const bool disc_in = state.rom_loaded && state.machine == Machine::genesis &&
                          state.genesis.cd_mode();
     EnableMenuItem(state.menu, IDM_CD_SWAP, MF_BYCOMMAND | (disc_in ? MF_ENABLED : MF_GRAYED));
+    // Plugging hardware in or out is a power cycle, which a netplay session
+    // cannot take from one end only.
+    CheckMenuItem(state.menu, IDM_CD_32X, MF_BYCOMMAND | (state.cd_32x ? MF_CHECKED : MF_UNCHECKED));
+    EnableMenuItem(state.menu, IDM_CD_32X,
+                   MF_BYCOMMAND | (state.netplay.active() ? MF_GRAYED : MF_ENABLED));
 
     // Both consoles of a link run the same cartridge, and the first window is
     // where it is chosen. Letting the second open a different game would leave
@@ -5831,6 +5859,7 @@ bool load_rom_from_path(RuntimeState& state, const std::filesystem::path& path,
             }
             return false;
         }
+        state.genesis.set_cd_32x(state.cd_32x);
         const auto result = state.genesis.load_cd(path, bios);
         if (!result.loaded) {
             error = result.message;
@@ -5924,6 +5953,32 @@ void restart_machine(RuntimeState& state, bool hard) {
 
 void soft_reset(RuntimeState& state) { restart_machine(state, false); }
 void hard_reset(RuntimeState& state) { restart_machine(state, true); }
+
+// Sega CD > 32X plugged in. Plugging hardware in or out is a power cycle on a
+// real console too, so a disc that is running restarts on the new setup.
+void toggle_cd_32x(RuntimeState& state) {
+    if (state.netplay.active()) {
+        return;
+    }
+    state.cd_32x = !state.cd_32x;
+    save_settings(state);
+    state.genesis.set_cd_32x(state.cd_32x);
+    const bool disc_running = state.rom_loaded && state.machine == Machine::genesis &&
+                              state.genesis.cd_mode();
+    if (disc_running) {
+        state.warned_no_32x_bios = false;
+        hard_reset(state);
+    }
+    sync_menu_state(state);
+    if (!state.cd_32x) {
+        set_status(state, L"32X unplugged - Sega CD discs run as on a Sega CD alone");
+    } else if (disc_running && !state.genesis.thirtytwox_plugged()) {
+        set_status(state, L"32X plugged in, but no 32X firmware was found, so this disc still runs "
+                          L"without it - set its folder on the BIOS tab in Configure.");
+    } else {
+        set_status(state, L"32X plugged in");
+    }
+}
 
 // A LOAD THAT FAILED FOR WANT OF A BIOS IS NOT REALLY AN ERROR, it is a
 // question. Everything else here just gets reported.
@@ -8795,6 +8850,7 @@ void boot_sega_cd(RuntimeState& state) {
         }
     }
     flush_battery(state, false);
+    state.genesis.set_cd_32x(state.cd_32x);
     const auto result = state.genesis.load_cd({}, bios);
     if (!result.loaded) {
         MessageBoxW(state.window, widen(result.message).c_str(), L"GenX", MB_OK | MB_ICONERROR);
@@ -11433,6 +11489,9 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
                     return 0;
                 case IDM_CD_BOOT:
                     boot_sega_cd(*state);
+                    return 0;
+                case IDM_CD_32X:
+                    toggle_cd_32x(*state);
                     return 0;
                 case IDM_CHEAT_GAME_GENIE:
                     show_game_genie(*state);

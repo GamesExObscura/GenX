@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Sega CD → 32X plugged in.** Untick it to run Sega CD discs on a console
+  with no 32X attached. Fahrenheit's first disc then plays its Sega CD version
+  instead of asking for disc 2, and Surgical Strike skips its "Sega CD or 32X"
+  question. The game restarts when you change it. The setting is saved.
+
+### Fixed
+
+- **Sega CD 32X discs no longer show a black screen without the 32X BIOS.**
+  With no 32X BIOS, GenX now runs a disc as on a Sega CD with no 32X. Discs
+  that need one (Corpse Killer, Night Trap, Slam City, Supreme Warrior) show
+  their own "this game requires a 32X" message, and the status bar says the
+  32X BIOS is missing. Fahrenheit's first disc and Surgical Strike play their
+  Sega CD versions.
+
 ## v1.1.3 (2026-11-11)
 
 ### Added

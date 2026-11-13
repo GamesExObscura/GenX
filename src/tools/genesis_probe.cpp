@@ -74,7 +74,17 @@ mercury::genesis::Genesis::LoadResult load_image(mercury::genesis::Genesis& mach
         failed.message = error;
         return failed;
     }
-    return machine.load_cd(bios_only ? std::filesystem::path() : rom, bios);
+    // MERCURY_CD_32X=0: run the disc with the 32X unplugged, the shell's
+    // Sega CD > "32X plugged in" switched off. Without the 32X BIOS it is
+    // unplugged either way - see Genesis::load_cd.
+    if (const char* e = std::getenv("MERCURY_CD_32X"); e != nullptr && *e == '0') {
+        machine.set_cd_32x(false);
+    }
+    auto result = machine.load_cd(bios_only ? std::filesystem::path() : rom, bios);
+    if (result.loaded) {
+        result.message += machine.thirtytwox_plugged() ? "\n32X: plugged in" : "\n32X: unplugged";
+    }
+    return result;
 }
 
 void write_bmp24(const std::filesystem::path& path, const std::vector<std::uint8_t>& rgb,
@@ -1294,6 +1304,12 @@ int run_summary(const std::filesystem::path& rom, int frames, const std::filesys
                 static_cast<unsigned long long>(machine.segacd().cdd_commands()),
                 static_cast<unsigned long long>(machine.segacd().sectors_decoded()),
                 cd_audio_peak);
+    // Its own line, so the sweep's status= line keeps its shape: a disc with
+    // the 32X unplugged that looked for one anyway (Genesis::load_cd).
+    if (machine.cd_mode()) {
+        std::printf("cd32x: %s%s\n", machine.thirtytwox_plugged() ? "plugged in" : "unplugged",
+                    machine.cd_looked_for_32x() ? ", the disc looked for one" : "");
+    }
     // MERCURY_MEM_DUMP_DIR=<dir>: the 68000's work RAM as wram.bin and, for
     // a Sega CD, the sub CPU's program RAM and Word RAM as prg.bin / word.bin,
     // at the end of the run. For searching a game's own code for who writes

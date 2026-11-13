@@ -128,6 +128,9 @@ void Genesis::reset_internal(bool power_on) noexcept {
     z80_in_vblank_ = false;
     z80_interrupt_cycles_ = 0;
     if (power_on) {
+        // A power cycle starts the disc's look for a 32X over (set_cd_32x
+        // plugs one in or out across exactly this).
+        cd_looked_for_32x_ = false;
         // Diagnostic counters measure a whole run; a reset in the middle of one
         // is part of what is being measured, so they are not cleared here.
         m68k_unimplemented_count_ = 0;
@@ -298,6 +301,15 @@ Genesis::LoadResult Genesis::load_cd(const std::filesystem::path& disc,
     // (it skips the cartridge initial-data-load when no cartridge is in).
     thirtytwox_->attach_rom(nullptr);
     thirtytwox_->attach_bios(disc);
+    // AND WITHOUT THAT BIOS THE 32X IS UNPLUGGED, not left attached and dead.
+    // A disc that finds a 32X believes it, and a 32X that cannot run is worse
+    // than none: Fahrenheit's first disc and Surgical Strike look for one and,
+    // finding it, ask for their 32X disc - which then cannot start either. On
+    // a Sega CD alone they play their Sega CD versions, which is what a player
+    // with no 32X BIOS can actually run. The player can also unplug it on
+    // purpose (set_cd_32x) to get those versions with the BIOS present.
+    thirtytwox_plugged_ = cd_32x_wanted_ && thirtytwox_->bios_loaded();
+    cd_looked_for_32x_ = false;
     // The console is whatever the BIOS belongs to: a Mega-CD and its BIOS are
     // one unit, and the BIOS checks the version register at power-on and
     // refuses to start on any other console. Telling a Japanese BIOS it was on
@@ -324,6 +336,13 @@ Genesis::LoadResult Genesis::load_cd(const std::filesystem::path& disc,
     return result;
 }
 
+void Genesis::set_cd_32x(bool wanted) noexcept {
+    cd_32x_wanted_ = wanted;
+    if (cd_mode_) {
+        thirtytwox_plugged_ = wanted && thirtytwox_->bios_loaded();
+    }
+}
+
 Genesis::LoadResult Genesis::load_rom(const std::filesystem::path& path) {
     LoadResult result;
     std::string error;
@@ -335,6 +354,10 @@ Genesis::LoadResult Genesis::load_rom(const std::filesystem::path& path) {
     // the Sega CD's console region: cartridges run on an overseas console.
     cd_mode_ = false;
     domestic_ = false;
+    // A cartridge always has the 32X under it - the adapter switches itself
+    // on from the header, and stays inert for a Mega Drive game.
+    thirtytwox_plugged_ = true;
+    cd_looked_for_32x_ = false;
     // Region byte drives the machine's timing. 'E' and 'A' are the PAL markers;
     // everything else, including the common "JUE", runs at 60Hz here.
     const auto& region = cartridge_.header().region;
@@ -419,6 +442,21 @@ void Genesis::note_hidden_sram_write(std::uint32_t address) noexcept {
     }
 }
 
+namespace {
+
+// What the 32X answers on the 68000's side whether or not it is switched on:
+// the adapter's registers, its video registers and palette, and the "MARS"
+// signature. (Its frame buffer and cartridge windows exist only once it is
+// on, and an unplugged 32X can never be switched on.) This is the whole of
+// what a game can look at to find one.
+bool thirtytwox_detection_address(std::uint32_t address) noexcept {
+    return mercury::thirtytwox::Adapter::decodes(address) ||
+           mercury::thirtytwox::ThirtyTwoX::decodes_video(address) ||
+           (address >= 0xA130EC && address <= 0xA130EF);
+}
+
+}  // namespace
+
 // The two cartridge windows the 68000 gains once the adapter is switched on:
 // a fixed 512KB at $880000 and a banked megabyte at $900000, the bank chosen
 // by the adapter's bank register. Returns -1 when the address is not one of
@@ -454,7 +492,8 @@ std::uint16_t Genesis::read16(std::uint32_t address) noexcept {
     // 68000 ROM rather than the cartridge. First test in the function because
     // it is also the reset vector fetch; it answers only for a cartridge that
     // declared itself a 32X, so no Mega Drive game can reach it.
-    if (std::uint16_t overlay = 0; thirtytwox_->m68k_boot_overlay(address, overlay)) {
+    if (std::uint16_t overlay = 0;
+        thirtytwox_plugged_ && thirtytwox_->m68k_boot_overlay(address, overlay)) {
         return overlay;
     }
     // Only hardware registers are worth tallying; ROM fetches and RAM traffic
@@ -483,7 +522,7 @@ std::uint16_t Genesis::read16(std::uint32_t address) noexcept {
         }
         return cartridge_.read16(map_rom(address));
     }
-    if (thirtytwox_->decodes_frame_buffer(address)) {
+    if (thirtytwox_plugged_ && thirtytwox_->decodes_frame_buffer(address)) {
         return thirtytwox_->frame_buffer_read16(address);
     }
     if (const auto window = thirtytwox_rom_offset(address); window >= 0) {
@@ -516,6 +555,12 @@ std::uint16_t Genesis::read16(std::uint32_t address) noexcept {
     // The 32X adapter's register block. Always decoded, even with the
     // adapter inert, because reading it is how a cartridge detects one - and
     // it sits in a gap no Mega Drive hardware uses, so nothing else changes.
+    // With the 32X unplugged (a disc - see load_cd) nothing answers here, and
+    // the look is remembered so the shell can say why.
+    if (!thirtytwox_plugged_ && thirtytwox_detection_address(address)) {
+        cd_looked_for_32x_ = true;
+        return 0xFFFF;
+    }
     if (mercury::thirtytwox::Adapter::decodes(address)) {
         // A communication port read is the 68000 asking the SH-2s a question.
         // Let them run up to this moment first, or the answer is always one
@@ -537,7 +582,8 @@ std::uint16_t Genesis::read16(std::uint32_t address) noexcept {
         return thirtytwox_->video_read16(address);
     }
     if (address >= 0xA130EC && address <= 0xA130EF) {
-        // Readable whenever an adapter is attached, which for GenX is always.
+        // Readable whenever an adapter is attached, which for GenX is always
+        // apart from a disc run without one (answered further up - load_cd).
         // NOT gated on the adapter being switched on: this signature is how a
         // cartridge FINDS the adapter, and it looks before it sets ADEN.
         // Gating it meant a cartridge could never discover the 32X it was
@@ -601,8 +647,15 @@ void Genesis::write16(std::uint32_t address, std::uint16_t value) noexcept {
     // The adapter's boot page, which is mapped over the bottom of the map
     // while the 32X is on. Almost all of it swallows writes; the horizontal
     // interrupt vector is real storage. See m68k_boot_overlay_write.
-    if (thirtytwox_->m68k_boot_overlay_write(address, static_cast<std::uint8_t>(value >> 8))) {
+    if (thirtytwox_plugged_ &&
+        thirtytwox_->m68k_boot_overlay_write(address, static_cast<std::uint8_t>(value >> 8))) {
         thirtytwox_->m68k_boot_overlay_write(address + 1, static_cast<std::uint8_t>(value));
+        return;
+    }
+    // An unplugged 32X (a disc - see load_cd): the write goes nowhere, so the
+    // adapter can never be switched on.
+    if (!thirtytwox_plugged_ && thirtytwox_detection_address(address)) {
+        cd_looked_for_32x_ = true;
         return;
     }
     if (mercury::thirtytwox::Adapter::decodes(address)) {
@@ -780,12 +833,17 @@ std::uint8_t Genesis::read8(std::uint32_t address) noexcept {
         return segacd_->main_read8(address);
     }
     // Same 68000 boot page as the word path - see read16.
-    if (std::uint16_t overlay = 0; thirtytwox_->m68k_boot_overlay(address, overlay)) {
+    if (std::uint16_t overlay = 0;
+        thirtytwox_plugged_ && thirtytwox_->m68k_boot_overlay(address, overlay)) {
         return static_cast<std::uint8_t>((address & 1) != 0 ? (overlay & 0xFF) : (overlay >> 8));
     }
     if (trace_reads_ && ((address >= 0x200000 && address < 0x210000) ||
                          (address >= 0xA00000 && address < 0xE00000))) {
         ++read_tally_[address];
+    }
+    if (!thirtytwox_plugged_ && thirtytwox_detection_address(address)) {
+        cd_looked_for_32x_ = true;  // see the word path
+        return 0xFF;
     }
     if (mercury::thirtytwox::Adapter::decodes(address)) {
         if (address >= mercury::thirtytwox::Adapter::kCommFirst) {
@@ -844,8 +902,12 @@ void Genesis::write8(std::uint32_t address, std::uint8_t value) noexcept {
         segacd_->main_write8(address, value);
         return;
     }
-    if (thirtytwox_->m68k_boot_overlay_write(address, value)) {
+    if (thirtytwox_plugged_ && thirtytwox_->m68k_boot_overlay_write(address, value)) {
         return;  // see the word path
+    }
+    if (!thirtytwox_plugged_ && thirtytwox_detection_address(address)) {
+        cd_looked_for_32x_ = true;  // see the word path
+        return;
     }
     if (mercury::thirtytwox::Adapter::decodes(address)) {
         if (address >= mercury::thirtytwox::Adapter::kCommFirst ||

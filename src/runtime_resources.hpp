@@ -132,6 +132,10 @@
 // its own front end, the CD player and the memory manager that formats and
 // erases backup RAM. Reachable with no game loaded at all.
 #define IDM_CD_BOOT 40502
+// Whether a 32X sits on the Sega CD. Off, a disc that looks for one finds
+// nothing - Fahrenheit's first disc and Surgical Strike then play their Sega
+// CD versions instead of asking for the 32X disc.
+#define IDM_CD_32X 40503
 // Swap to the disc in an optical drive, A to Z, the same way as the Open ROM
 // list above.
 #define IDM_CD_SWAP_DRIVE_FIRST 40510

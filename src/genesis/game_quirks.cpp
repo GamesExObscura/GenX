@@ -38,7 +38,7 @@ struct QuirkEntry {
 // El. Viento looked like it needed charge_ea_time - it sat on a flat 2-colour
 // screen without it - but it was only waiting for a button press, and once the
 // test harness pressed one it reached 63.9% coverage either way.
-constexpr std::array<QuirkEntry, 5> kTable{{
+constexpr std::array<QuirkEntry, 7> kTable{{
     // NBA Live 98 (USA), serial "GM T-172186-00". Its header declares no
     // battery RAM - the SRAM tag is two spaces - but the game saves rosters and
     // settings. Without a window mapped it reads its save area as open bus and
@@ -128,6 +128,24 @@ constexpr std::array<QuirkEntry, 5> kTable{{
     // (charge_ea_time was also tried here - it is reported to "need accurate
     // timing" - and measured to change nothing.)
     {"GMT10004600", GameQuirks{.hint_raise_on_reload = true}},
+
+    // Triple Play - Gold Edition (USA), serial "GM T-172116-00" (issue #8).
+    // Its menus are drawn on the far half of a 128-cell plane and scrolled in
+    // by an H-interrupt chain read from a table in RAM: each interrupt writes
+    // register 10 and jumps to a routine. The vblank leaves register 10 at 0,
+    // and the first handler (line 1) sets 45 - so under the reload-and-raise
+    // rule the counter, already reloaded with 0, expires again on the very
+    // next line, and that is the interrupt that reloads 45. The chain then
+    // fires at lines 1, 2, 48 and 193, and the third stage - the menu scroll
+    // - lands at line 48. Under the default rule the 0 -> 45 change takes the
+    // line-2 interrupt away, every later stage moves up one slot, the menu
+    // scroll lands at line 192 and the menu body shows plane A's empty left
+    // half: "selections in the menu are missing". Genesis Plus GX counts it
+    // the same way (reload and raise on the decrement past zero).
+    {"GMT17211600", GameQuirks{.hint_raise_on_reload = true}},
+    // Triple Play 96 (USA), serial "GM T-172026-04": the same engine and the
+    // same empty Game Setup menu without it.
+    {"GMT17202604", GameQuirks{.hint_raise_on_reload = true}},
 
     // HardBall III (USA) (Unl), serial "GM ACLD012 -00". An Accolade cartridge
     // with battery RAM at 0x200000-0x20FFFF that its header declares as absent.

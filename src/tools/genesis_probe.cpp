@@ -3301,6 +3301,21 @@ int main(int argc, char** argv) {
             .write(reinterpret_cast<const char*>(wram.data()), static_cast<std::streamsize>(wram.size()));
         std::printf("VDP memory and work RAM written to %s\n", dir);
     }
+    // MERCURY_VRAM_WATCH=<hex>[,<hex size>] in this mode too: the last writes
+    // into the window, with the frame and line they landed on.
+    if (machine.vdp().vram_watch_count() != 0) {
+        std::printf("VRAM watch window: %llu writes, last %zu in order:\n",
+                    static_cast<unsigned long long>(machine.vdp().vram_watch_count()),
+                    machine.vdp().vram_watch_log().size());
+        const auto& lg = machine.vdp().vram_watch_log();
+        const auto pos = machine.vdp().vram_watch_pos();
+        for (std::size_t i = 0; i < lg.size(); ++i) {
+            const auto& e = lg[(pos + i) % lg.size()];
+            if (e[1] == 0 && e[2] == 0 && e[0] == 0) continue;
+            std::printf("    frame %5u line %3u  %04X = %04X  %s\n", e[0], e[1], e[2], e[3],
+                        e[4] ? "DMA" : "port");
+        }
+    }
     std::printf("Z80 reset asserted by the 68000: %llu times, last on frame %u\n",
                 static_cast<unsigned long long>(machine.z80_reset_asserts()), machine.z80_reset_last_frame());
     // Which V counter values the game read, and from where. A raster effect

@@ -250,7 +250,7 @@ namespace {
 // the wrong machine. The version (GameGear::kStateVersion) is bumped whenever
 // visit_state changes shape.
 constexpr std::uint32_t kStateMagic = 0x58'4E'47'47;  // "GGNX"
-// The oldest layout still readable: version 4 only appended to version 3.
+// The oldest layout still readable: versions 4 and 5 only appended to 3.
 constexpr std::uint32_t kOldestLoadableVersion = 3;
 }  // namespace
 

@@ -24,6 +24,15 @@
   background size real hardware doesn't support, which makes its rows wrap
   around, and GenX didn't wrap them. This also removes a strip of stray
   tiles at the top-left of the court in Barkley Shut Up and Jam!.
+- **Madou Monogatari I (Game Gear): no more broken line under Arle's
+  picture** (issue #16). In the bedroom scene and others like it, the last
+  line of the picture above the text box showed blocks of the wrong graphics.
+  The game switches to the text box's sprites partway down the screen, and
+  changes the sprite size a moment before it changes which sprites to use. On
+  a real Game Gear the size change arrives too late to affect the picture's
+  last line. GenX applied it to that line, which drew it with the wrong sprite
+  size. GenX now settles each line's sprites just before the line starts, as
+  the console does.
 - **QuackShot (Rev A): no more black screen** (issue #11). The 512 KB dump of
   this cartridge stores its two ROM chips back to back. The game expects the
   second chip at a higher address, so loaded as-is it never started. GenX now

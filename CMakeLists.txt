@@ -334,6 +334,14 @@ target_link_libraries(vdp_counter_tests PRIVATE mercury)
 
 add_test(NAME vdp_counter_tests COMMAND vdp_counter_tests)
 
+add_executable(gg_vdp_tests
+    src/tests/gg_vdp_tests.cpp
+)
+
+target_link_libraries(gg_vdp_tests PRIVATE mercury)
+
+add_test(NAME gg_vdp_tests COMMAND gg_vdp_tests)
+
 add_executable(chd_probe
     src/tools/chd_probe.cpp
 )

@@ -37,6 +37,9 @@ public:
     static constexpr std::uint32_t kCpuCyclesPerScanline = 228;
     static constexpr std::uint32_t kScanlinesPerFrame = 262;
     static constexpr std::uint32_t kVisibleScanlines = 192;
+    // Cycle within a line at which the sprite settings for the next line are
+    // latched - see the comment above its static_assert in vdp.cpp.
+    static constexpr std::uint32_t kSpriteLatchCycle = 211;
 
     void reset() noexcept;
     // Must be set before reset() so the frame buffer is sized correctly.
@@ -79,6 +82,13 @@ public:
     [[nodiscard]] std::uint32_t debug_line_interrupt_count() const noexcept { return line_interrupt_count_; }
     [[nodiscard]] std::uint32_t debug_frame_interrupt_count() const noexcept { return frame_interrupt_count_; }
     [[nodiscard]] std::uint8_t debug_line_counter() const noexcept { return line_counter_; }
+    // Probe A/B switch: where in the line the sprite settings are latched for
+    // the next line. 228 (the line's end) is the old behaviour of taking them
+    // as each line is drawn. Not part of the machine state.
+    void set_sprite_latch_cycle_for_probe(std::uint32_t cycle) noexcept { sprite_latch_cycle_ = cycle; }
+    // Raw memory, for probes that dump it to work a picture out by hand.
+    [[nodiscard]] const std::array<std::uint8_t, kVramSize>& debug_vram() const noexcept { return vram_; }
+    [[nodiscard]] const std::array<std::uint8_t, kColorRamWordCount * 2>& debug_cram() const noexcept { return cram_; }
 
     // Structural render audit. Statistical measures (colour counts, animation
     // rate) cannot tell a wrong picture from a right one; these ask instead
@@ -115,6 +125,10 @@ private:
     [[nodiscard]] std::uint16_t current_address() const noexcept;
     void increment_address() noexcept;
     void set_v_counter_from_scanline() noexcept;
+    void latch_sprite_registers() noexcept;
+    // The registers as the sprite unit sees them on the line being drawn: the
+    // live set with R1's size bits, R5 and R6 taken from the sprite latch.
+    [[nodiscard]] std::array<std::uint8_t, 16> sprite_registers() const noexcept;
 
   public:
     // Save-state contents. The write-audit bitmap and the read/write counters
@@ -150,6 +164,15 @@ private:
             sanitize_loaded();
         }
     }
+    // Game Gear state version 5 appends the sprite latch at the very end, so a
+    // version 4 file keeps its layout. An older file has no latch; the live
+    // registers stand in for it, as the latch would hold them mid-line.
+    template <typename Archive>
+    void visit_sprite_latch_state(Archive& ar) {
+        ar(sprite_latch_);
+    }
+    void derive_sprite_latch() noexcept { latch_sprite_registers(); }
+
     // A loaded state can come from someone else (netplay, a shared file).
     // Values the hardware could never hold are brought back into range, so
     // none can become an index past a table or a loop that never ends.
@@ -188,6 +211,10 @@ private:
     // showed up as a corrupted band around row 195).
     std::array<std::uint8_t, kMaxVisibleHeight> horizontal_scroll_latch_{};
     std::uint8_t vertical_scroll_latch_ = 0x00;
+    // R1, R5 and R6 as they stood at the last sprite latch point - what the
+    // next line's sprites are drawn with (see kSpriteLatchCycle in vdp.cpp).
+    std::array<std::uint8_t, 3> sprite_latch_{};
+    std::uint32_t sprite_latch_cycle_ = kSpriteLatchCycle;
     std::uint32_t status_read_count_ = 0;
     std::uint32_t data_read_count_ = 0;
     std::uint32_t control_write_count_ = 0;

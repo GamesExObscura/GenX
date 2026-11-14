@@ -791,6 +791,13 @@ int main(int argc, char** argv) {
         return 1;
     }
     game_gear.reset();
+    // A/B switch for the sprite latch: 228 restores the old behaviour of
+    // taking the sprite settings as each line is drawn.
+    if (const char* latch = std::getenv("MERCURY_GG_SPRITE_LATCH"); latch != nullptr && *latch != '\0') {
+        const auto cycle = static_cast<std::uint32_t>(std::strtoul(latch, nullptr, 10));
+        game_gear.mutable_vdp().set_sprite_latch_cycle_for_probe(cycle);
+        std::cout << "sprite latch cycle: " << cycle << " (MERCURY_GG_SPRITE_LATCH)\n";
+    }
     if (!g_battery_in.empty()) {
         std::ifstream in(g_battery_in, std::ios::binary);
         const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(in)),
@@ -879,6 +886,10 @@ int main(int argc, char** argv) {
                 break;
             }
 
+            // Where the instruction began, so a register write can be placed
+            // inside the line rather than only after the instruction ended.
+            const auto step_start_scanline = game_gear.vdp().debug_scanline();
+            const auto step_start_cycles = game_gear.vdp().debug_cycles_into_scanline();
             const auto result = game_gear.step();
             ++stats.steps;
 
@@ -904,6 +915,15 @@ int main(int argc, char** argv) {
             }
             if (result.message.rfind("INT accepted", 0) == 0) {
                 ++stats.irq_accepted;
+                // With the register log on, show where in the line the CPU
+                // took each interrupt, so the latency from the line IRQ to the
+                // handler's register writes can be read off directly.
+                if (options.log_vdp_regs && frame >= options.from_frame && reg_events < 4000) {
+                    std::cout << "  [INT] frame=" << frame
+                              << " scanline=" << game_gear.vdp().debug_scanline()
+                              << " cyc=" << game_gear.vdp().debug_cycles_into_scanline()
+                              << " pc=" << hex16(result.pc_before) << "\n";
+                }
             }
 
             trace_record(game_gear, result);
@@ -924,6 +944,8 @@ int main(int argc, char** argv) {
                     std::cout << "  [R" << static_cast<int>(index) << "=" << hex8(value)
                               << "] frame=" << frame
                               << " scanline=" << game_gear.vdp().debug_scanline()
+                              << " cyc=" << game_gear.vdp().debug_cycles_into_scanline()
+                              << " (instr began " << step_start_scanline << ":" << step_start_cycles << ")"
                               << " pc=" << hex16(result.pc_before);
                     if (index == 0) {
                         std::cout << "   IE1(line)=" << (((value & 0x10) != 0) ? "ON" : "off");
@@ -1141,6 +1163,24 @@ int main(int argc, char** argv) {
                     directory / ("probe_map_" + std::to_string(frame) + ".bmp"));
                 (void)game_gear.vdp().export_tilesheet_bmp(
                     directory / ("probe_tiles_" + std::to_string(frame) + ".bmp"));
+                // Raw VRAM, CRAM and registers, so a picture can be rebuilt
+                // by hand under other register settings ("what would this
+                // line look like with the other sprite table?").
+                const auto write_raw = [&](const std::string& name, const std::uint8_t* data,
+                                           std::size_t size) {
+                    std::ofstream raw(directory / (name + "_" + std::to_string(frame) + ".bin"),
+                                      std::ios::binary);
+                    raw.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
+                };
+                const auto& vram = game_gear.vdp().debug_vram();
+                const auto& cram = game_gear.vdp().debug_cram();
+                std::array<std::uint8_t, 16> regs{};
+                for (std::size_t i = 0; i < regs.size(); ++i) {
+                    regs[i] = game_gear.vdp().register_value(i);
+                }
+                write_raw("probe_vram", vram.data(), vram.size());
+                write_raw("probe_cram", cram.data(), cram.size());
+                write_raw("probe_regs", regs.data(), regs.size());
             }
         }
 

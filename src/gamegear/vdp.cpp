@@ -118,6 +118,24 @@ constexpr std::size_t kGameGearRightColumnsInhibitPixels = 16;
 // status flag transitions to 1. We don't model the small intra-line phase
 // offset and simply let the CPU sample the line as soon as it's set.
 constexpr std::uint32_t kFrameInterruptAssertDelayCycles = 0;
+// THE SPRITES OF A LINE ARE SETTLED BEFORE THE LINE BEGINS. The VDP picks a
+// line's sprites during the line above it and fetches their patterns at the
+// end of that line; the last read of the sprite settings (sprite size, R1 bits
+// 0-1; attribute table, R5; pattern base, R6) for line N is 6 of the chip's
+// 342 clocks into line N, before its pixels start - per Clock Signal's SMS
+// fetch sequence, about 221 CPU cycles into the line above in this core's
+// timebase. A register write the CPU makes after that point belongs to the
+// line after. This core applies an OUT at the first cycle of the instruction,
+// while the VDP sees it in the instruction's I/O cycle about 10 cycles later,
+// so a write starting at cycle 211 or later is already too late.
+//
+// Madou Monogatari I's text-box split (issue #16) is exactly that: its line
+// handler writes R1 (8x16 sprites) between cycles 211 and 223 of the line
+// above the split and R5 (the text box's sprite table) early in the next one.
+// Taking both when the line was drawn gave the last line of Arle's picture
+// her own sprites at double height - one corrupted line.
+// (Vdp::kSpriteLatchCycle = 211.)
+static_assert(Vdp::kSpriteLatchCycle < Vdp::kCpuCyclesPerScanline);
 constexpr std::uint32_t kHCounterCountsPerScanline = 171;
 constexpr std::uint32_t kHCounterWrapPrefixCounts = 23;
 
@@ -874,6 +892,22 @@ void Vdp::reset() noexcept {
     presented_frame_pixels_.assign(kMaxVisibleWidth * kMaxVisibleHeight * 3, 0x00);
     set_v_counter_from_scanline();
     h_counter_ = compute_h_counter(cycles_into_scanline_);
+    latch_sprite_registers();
+}
+
+void Vdp::latch_sprite_registers() noexcept {
+    sprite_latch_ = {registers_[1], registers_[5], registers_[6]};
+}
+
+std::array<std::uint8_t, 16> Vdp::sprite_registers() const noexcept {
+    // Everything else is read as the line is drawn; only the sprite settings
+    // come from the latch (see kSpriteLatchCycle). R1 keeps its live display
+    // and mode bits and takes just the size and zoom bits from the latch.
+    auto registers = registers_;
+    registers[1] = static_cast<std::uint8_t>((registers_[1] & ~0x03) | (sprite_latch_[0] & 0x03));
+    registers[5] = sprite_latch_[1];
+    registers[6] = sprite_latch_[2];
+    return registers;
 }
 
 void Vdp::sanitize_loaded() noexcept {
@@ -898,8 +932,12 @@ void Vdp::advance_cycles(std::uint32_t cpu_cycles) noexcept {
                 : 0;
     }
 
+    const auto line_position_before = cycles_into_scanline_;
     cycles_into_scanline_ += cpu_cycles;
     h_counter_ = compute_h_counter(std::min<std::uint32_t>(cycles_into_scanline_, kCpuCyclesPerScanline - 1));
+    if (line_position_before < sprite_latch_cycle_ && cycles_into_scanline_ >= sprite_latch_cycle_) {
+        latch_sprite_registers();
+    }
 
     while (cycles_into_scanline_ >= kCpuCyclesPerScanline) {
         cycles_into_scanline_ -= kCpuCyclesPerScanline;
@@ -942,7 +980,7 @@ void Vdp::advance_cycles(std::uint32_t cpu_cycles) noexcept {
                     background.sprite_priority_mask,
                     vram_,
                     cram_,
-                    registers_,
+                    sprite_registers(),
                     visible_y,
                     mode_);
                 // Both bits latch until the CPU reads the status port, so they
@@ -994,6 +1032,11 @@ void Vdp::advance_cycles(std::uint32_t cpu_cycles) noexcept {
 
         if (scanline_ == 0) {
             ++frames_elapsed_;
+        }
+
+        // An advance long enough to pass this new line's latch point too.
+        if (cycles_into_scanline_ >= sprite_latch_cycle_) {
+            latch_sprite_registers();
         }
     }
 
@@ -1344,8 +1387,19 @@ bool Vdp::export_background_map_bmp(const std::filesystem::path& path) const {
 }
 
 bool Vdp::export_visible_frame_bmp(const std::filesystem::path& path) const {
-    if (presented_frame_pixels_.size() == visible_width() * visible_height() * 3) {
-        return write_bmp24(path, presented_frame_pixels_, visible_width(), visible_height());
+    // The picture as it was drawn line by line - what the window shows. The
+    // buffer is sized for the tallest mode and packed at the visible width, so
+    // the frame is its first width x height pixels. This used to demand an
+    // exact size match, which stopped matching when the buffer grew to 256x224
+    // for the extended modes; every export then quietly fell back to redrawing
+    // the whole frame with the registers left at its end, which shows none of
+    // a game's mid-frame changes (Madou Monogatari's text-box split).
+    const auto frame_bytes = visible_width() * visible_height() * 3;
+    if (presented_frame_pixels_.size() >= frame_bytes) {
+        const std::vector<std::uint8_t> frame(
+            presented_frame_pixels_.begin(),
+            presented_frame_pixels_.begin() + static_cast<std::ptrdiff_t>(frame_bytes));
+        return write_bmp24(path, frame, visible_width(), visible_height());
     }
     const auto pixels = visible_frame_pixels(false);
     return write_bmp24(path, pixels, visible_width(), visible_height());

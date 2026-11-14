@@ -44,6 +44,8 @@ public:
     // Non-const access, for the host to plug a Gear-to-Gear cable in.
     [[nodiscard]] SystemControl& mutable_system_control() noexcept { return system_control_; }
     [[nodiscard]] const Vdp& vdp() const noexcept;
+    // For probes' A/B switches only.
+    [[nodiscard]] Vdp& mutable_vdp() noexcept { return vdp_; }
 
     // Whether this cartridge needs the link port's transmit holding register.
     // See the definition: exactly one game does, and exactly one game breaks
@@ -66,7 +68,9 @@ private:
     // carries a transmit/receive state machine.
     // 4: the baseball cartridges' serial EEPROM, appended at the very end so a
     // version 3 file is laid out exactly as before and still loads.
-    static constexpr std::uint32_t kStateVersion = 4;
+    // 5: the VDP's sprite latch (the sprite settings it took for the next
+    // line), appended after the EEPROM for the same reason.
+    static constexpr std::uint32_t kStateVersion = 5;
 
     template <typename Archive>
     void visit_state(Archive& ar, std::uint32_t version = kStateVersion) {
@@ -81,6 +85,11 @@ private:
             cartridge_.visit_eeprom_state(ar);
         } else if constexpr (Archive::loading()) {
             cartridge_.reset_eeprom_logic();
+        }
+        if (version >= 5) {
+            vdp_.visit_sprite_latch_state(ar);
+        } else if constexpr (Archive::loading()) {
+            vdp_.derive_sprite_latch();
         }
     }
 

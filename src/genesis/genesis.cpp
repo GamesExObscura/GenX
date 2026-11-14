@@ -154,6 +154,11 @@ void Genesis::reset_internal(bool power_on) noexcept {
     sram_enabled_ = cartridge_.header().has_sram;
     hidden_sram_active_ = false;
     eeprom_.reset();
+    // The T-5740's EEPROM is deselected by power-on; the RESET button does
+    // not reach it.
+    if (power_on) {
+        spi_eeprom_.reset();
+    }
     // Per-game behaviour switches, applied before the CPU comes out of reset so
     // the very first instruction already runs under them.
     const GameQuirks quirks = quirks_for(cartridge_.header());
@@ -286,6 +291,7 @@ Genesis::LoadResult Genesis::load_cd(const std::filesystem::path& disc,
     // SVP and the battery code from finding a stale one.
     cartridge_ = Cartridge{};
     cd_mode_ = true;
+    t5740_board_ = false;
     // The 68000's timing comes from the disc rather than a quirk table - see
     // disc_charges_ea_time - and reset() below is what applies it.
     // THE 32X IS STILL PLUGGED IN, and a few discs are "Sega CD 32X" titles
@@ -378,6 +384,13 @@ Genesis::LoadResult Genesis::load_rom(const std::filesystem::path& path) {
     // the Sega CD's console region: cartridges run on an overseas console.
     cd_mode_ = false;
     domestic_ = false;
+    // WaterMelon's T-5740 board, by product code (Pier Solar is T-574023).
+    // Its EEPROM starts erased; a save file, if there is one, is loaded over
+    // this by the host afterwards.
+    t5740_board_ = cartridge_.header().serial.find("T-5740") != std::string::npos;
+    if (t5740_board_) {
+        std::fill(sram_.begin(), sram_.end(), std::uint8_t{0xFF});
+    }
     // A cartridge always has the 32X under it - the adapter switches itself
     // on from the header, and stays inert for a Mega Drive game.
     thirtytwox_plugged_ = true;
@@ -519,6 +532,11 @@ std::uint16_t Genesis::read16(std::uint32_t address) noexcept {
     if (std::uint16_t overlay = 0;
         thirtytwox_plugged_ && thirtytwox_->m68k_boot_overlay(address, overlay)) {
         return overlay;
+    }
+    // The T-5740 board answers the whole $A130xx block with its EEPROM's
+    // output on bit 0 (see the byte path).
+    if (t5740_board_ && (address & 0xFFFF00) == 0xA13000) {
+        return spi_eeprom_.data_out() ? 0x0001 : 0x0000;
     }
     // Only hardware registers are worth tallying; ROM fetches and RAM traffic
     // would bury the signal. 0x300000+ is above every normal cartridge and is
@@ -674,6 +692,12 @@ void Genesis::write16(std::uint32_t address, std::uint16_t value) noexcept {
     if (thirtytwox_plugged_ &&
         thirtytwox_->m68k_boot_overlay_write(address, static_cast<std::uint8_t>(value >> 8))) {
         thirtytwox_->m68k_boot_overlay_write(address + 1, static_cast<std::uint8_t>(value));
+        return;
+    }
+    // The T-5740 board decodes the address as given, so a word write (always
+    // to an even address) lands on none of its odd-numbered registers.
+    if (t5740_board_ && (address & 0xFFFF00) == 0xA13000) {
+        t5740_write(address, value);
         return;
     }
     // An unplugged 32X (a disc - see load_cd): the write goes nowhere, so the
@@ -864,6 +888,11 @@ std::uint8_t Genesis::read8(std::uint32_t address) noexcept {
         thirtytwox_plugged_ && thirtytwox_->m68k_boot_overlay(address, overlay)) {
         return static_cast<std::uint8_t>((address & 1) != 0 ? (overlay & 0xFF) : (overlay >> 8));
     }
+    // The T-5740 board drives only the low byte lane: its EEPROM output on
+    // bit 0 at an odd address, nothing at an even one.
+    if (t5740_board_ && (address & 0xFFFF00) == 0xA13000) {
+        return (address & 1) != 0 && spi_eeprom_.data_out() ? 0x01 : 0x00;
+    }
     if (trace_reads_ && ((address >= 0x200000 && address < 0x210000) ||
                          (address >= 0xA00000 && address < 0xE00000))) {
         ++read_tally_[address];
@@ -917,6 +946,18 @@ std::uint8_t Genesis::read8(std::uint32_t address) noexcept {
         if (in_hidden_sram(address)) {
             return eeprom_.read_byte();
         }
+        // PIER SOLAR'S COPY PROTECTION (issue #7). On the T-5740 board a byte
+        // read of $018100-$0181FF returns the same byte of the first 32KB of
+        // the ROM - here, the cartridge header - rather than the ROM data at
+        // that address. The game builds the key for its code-in-RAM bank
+        // switcher from bytes read there (ADD.B $1B8(A0) with A0 = $018010),
+        // so a plain ROM read gives the wrong key, the routine it calls at
+        // $FF1920 is garbage, and the game locks up on the disclaimer screen.
+        // Genesis Plus GX answers byte reads there the same way; word reads
+        // are left alone, as there.
+        if (t5740_board_ && (address & 0xFFFF00) == 0x018100) {
+            return cartridge_.read8(address & 0x7FFF);
+        }
         return cartridge_.read8(map_rom(address));
     }
     const auto word = read16(address & ~std::uint32_t{1});
@@ -931,6 +972,10 @@ void Genesis::write8(std::uint32_t address, std::uint8_t value) noexcept {
     }
     if (thirtytwox_plugged_ && thirtytwox_->m68k_boot_overlay_write(address, value)) {
         return;  // see the word path
+    }
+    if (t5740_board_ && (address & 0xFFFF00) == 0xA13000) {
+        t5740_write(address, value);
+        return;
     }
     if (!thirtytwox_plugged_ && thirtytwox_detection_address(address)) {
         cd_looked_for_32x_ = true;  // see the word path
@@ -1589,6 +1634,33 @@ bool Genesis::battery_is_eeprom() const noexcept {
     return serial_eeprom_cart();
 }
 
+// The T-5740 board's registers, by the low byte of the address. Only the odd
+// addresses $01-$09 exist; everything else in the block, including the Sega
+// mapper's $A130F1-FF, writes to nothing. (Pier Solar does write $A130F3 and
+// $A130FF; on this board those go nowhere, and obeying them would page the
+// wrong banks in.)
+void Genesis::t5740_write(std::uint32_t address, std::uint16_t value) noexcept {
+    switch (address & 0xFF) {
+        case 0x03:  // $280000-$2FFFFF
+        case 0x05:  // $300000-$37FFFF
+        case 0x07:  // $380000-$3FFFFF
+        {
+            const auto slot = 5u + (((address & 0xFF) - 0x03u) >> 1);
+            rom_banks_[slot] = static_cast<std::uint32_t>(value & 0x0F) * 0x80000u;
+            return;
+        }
+        case 0x09:
+            if (spi_eeprom_.write(static_cast<std::uint8_t>(value & 0xFF), sram_)) {
+                battery_dirty_ = true;
+            }
+            return;
+        default:
+            // $01 is a mode register whose bits have no effect anyone has
+            // found; the rest decode to nothing.
+            return;
+    }
+}
+
 bool Genesis::battery_backed() const noexcept {
     // The Sega CD's internal 8KB, which every disc saves into.
     if (cd_mode_) {
@@ -1597,7 +1669,7 @@ bool Genesis::battery_backed() const noexcept {
     // The header's own flag, the quirk table's forced window for the carts whose
     // headers lie about it, and "the game has actually driven the EEPROM" - a
     // cart can carry one without the header admitting it.
-    return cartridge_.header().has_sram || forced_sram_ || eeprom_.ever_used();
+    return cartridge_.header().has_sram || forced_sram_ || eeprom_.ever_used() || t5740_board_;
 }
 
 std::vector<std::uint8_t> Genesis::battery_snapshot() const {

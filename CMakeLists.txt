@@ -48,6 +48,7 @@ add_library(mercury
     src/segacd/segacd_pcm.cpp
     src/genesis/cartridge.cpp
     src/genesis/eeprom.cpp
+    src/genesis/spi_eeprom.cpp
     src/genesis/game_quirks.cpp
     src/genesis/genesis.cpp
     src/genesis/io.cpp
@@ -333,6 +334,14 @@ add_executable(vdp_counter_tests
 target_link_libraries(vdp_counter_tests PRIVATE mercury)
 
 add_test(NAME vdp_counter_tests COMMAND vdp_counter_tests)
+
+add_executable(t5740_tests
+    src/tests/t5740_tests.cpp
+)
+
+target_link_libraries(t5740_tests PRIVATE mercury)
+
+add_test(NAME t5740_tests COMMAND t5740_tests)
 
 add_executable(gg_vdp_tests
     src/tests/gg_vdp_tests.cpp

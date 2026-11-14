@@ -11,6 +11,14 @@
 
 ### Fixed
 
+- **Pier Solar and the Great Architects now plays, and saves** (issue #7). It
+  stopped for good on its opening disclaimer screen. Pier Solar's cartridge is
+  WaterMelon's own design: a 64-megabit board with its own bank switching, a
+  64 KB save chip, and a copy-protection trick that real cartridges pass and
+  plain ROM images fail. GenX now emulates the whole board. The game gets
+  past the disclaimer and asks for its language on the first run. It plays,
+  and its saves are written to the game's save file like any other
+  cartridge's.
 - **Trouble Shooter and Decap Attack: the buttons now do what they should**
   (issue #9). C was read as Start and B as A, and the real A and Start buttons
   did nothing. Both games read A and Start a moment after letting go of the

@@ -15,6 +15,7 @@
 #include "mercury/gamegear/psg.hpp"
 #include "mercury/genesis/cartridge.hpp"
 #include "mercury/genesis/eeprom.hpp"
+#include "mercury/genesis/spi_eeprom.hpp"
 #include "mercury/genesis/io.hpp"
 #include "mercury/genesis/svp.hpp"
 #include "mercury/genesis/vdp.hpp"
@@ -256,6 +257,9 @@ private:
         battery_dirty_ = false;
         segacd_->clear_backup_ram_dirty();
     }
+    // Whether the cartridge is WaterMelon's T-5740 board (Pier Solar), whose
+    // 64KB SPI EEPROM is kept in the battery RAM buffer.
+    [[nodiscard]] bool t5740_board() const noexcept { return t5740_board_; }
     // Raw bytes, no header - the same shape every other emulator's .srm has.
     [[nodiscard]] std::vector<std::uint8_t> battery_snapshot() const;
     void restore_battery(const std::vector<std::uint8_t>& bytes) noexcept;
@@ -277,7 +281,11 @@ private:
     // Version 6 appends the VDP's raster samples (Vdp::visit_raster_samples)
     // at the very end, so everything before them is laid out exactly as in
     // version 5 and the older files keep loading.
-    static constexpr std::uint32_t kStateVersion = 6;
+    //
+    // Version 7 appends the T-5740 board's SPI EEPROM state machine (Pier
+    // Solar) after those, for the same reason. Its 64KB array is the battery
+    // RAM, which every version already carries.
+    static constexpr std::uint32_t kStateVersion = 7;
     static constexpr std::uint8_t kMediaCd = 0x01;
     static constexpr std::uint8_t kMedia32x = 0x02;
     static constexpr std::uint8_t kMediaSvp = 0x04;
@@ -317,6 +325,11 @@ private:
             vdp_.visit_raster_samples(ar);
         } else if constexpr (Archive::loading()) {
             vdp_.derive_raster_samples();
+        }
+        if (version >= 7) {
+            spi_eeprom_.visit_state(ar);
+        } else if constexpr (Archive::loading()) {
+            spi_eeprom_.reset();
         }
         if constexpr (Archive::loading()) {
             sanitize_loaded();
@@ -406,6 +419,16 @@ private:
     std::uint32_t forced_sram_start_ = 0;
     std::uint32_t forced_sram_end_ = 0;
     SerialEeprom eeprom_;
+    // WATERMELON'S T-5740 BOARD (Pier Solar), found by the header's product
+    // code. Its registers sit in the $A130xx block: $A13003/05/07 page any of
+    // sixteen 512KB banks into $280000/$300000/$380000, $A13009 drives the SPI
+    // EEPROM, and reads anywhere in the block return the EEPROM's output on
+    // bit 0. It also answers byte reads of $018100-$0181FF from the start of
+    // the ROM instead - see read8. The Sega mapper's $A130F1-FF registers do
+    // not exist on it.
+    bool t5740_board_ = false;
+    SpiEeprom spi_eeprom_;
+    void t5740_write(std::uint32_t address, std::uint16_t value) noexcept;
     // The DSP on the Virtua Racing cartridge. Inert unless the loaded ROM is an
     // SVP cart, and its address windows sit above every normal cartridge, so it
     // cannot affect any other game.

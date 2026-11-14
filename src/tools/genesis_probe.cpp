@@ -3057,6 +3057,23 @@ int main(int argc, char** argv) {
     }
     std::cout << load.message << "\n\n";
 
+    // MERCURY_BATTERY_IN=<file>: the save a previous run (or the window) left,
+    // loaded the way the window loads a .srm - after the cartridge, before
+    // the first instruction.
+    if (const char* path = std::getenv("MERCURY_BATTERY_IN"); path != nullptr && *path != '\0') {
+        if (std::FILE* f = std::fopen(path, "rb")) {
+            std::vector<std::uint8_t> bytes;
+            std::uint8_t chunk[4096];
+            std::size_t got = 0;
+            while ((got = std::fread(chunk, 1, sizeof(chunk), f)) > 0) {
+                bytes.insert(bytes.end(), chunk, chunk + got);
+            }
+            std::fclose(f);
+            machine.restore_battery(bytes);
+            std::printf("battery in: %zu bytes from %s\n", bytes.size(), path);
+        }
+    }
+
     // MERCURY_PAD6=1 here too. It used to be set in the summary path only, so
     // the verbose report - the one that prints the port and the register dumps
     // - always showed a three-button pad however the run was configured, which
@@ -3728,6 +3745,26 @@ int main(int argc, char** argv) {
     std::printf("  z80 interrupts  : %llu\n", static_cast<unsigned long long>(machine.z80_interrupts()));
     std::printf("  ym2612 samples  : %zu (peak %d)\n", fm.size(), fm_peak);
     std::printf("  psg samples     : %zu (peak %d)\n", psg.size(), psg_peak);
+
+    // The cartridge's save memory at the end of the run, and
+    // MERCURY_BATTERY_OUT=<file> to keep it - the .srm the window would write.
+    if (machine.battery_backed()) {
+        const auto battery = machine.battery_snapshot();
+        std::size_t written = 0;
+        for (const auto byte : battery) {
+            if (byte != 0xFF) ++written;
+        }
+        std::printf("\nBattery\n  %zu bytes%s, %zu not erased (0xFF), dirty=%s\n", battery.size(),
+                    machine.t5740_board() ? " (T-5740 SPI EEPROM)" : "", written,
+                    machine.battery_dirty() ? "yes" : "no");
+        if (const char* path = std::getenv("MERCURY_BATTERY_OUT"); path != nullptr && *path != '\0') {
+            if (std::FILE* f = std::fopen(path, "wb")) {
+                std::fwrite(battery.data(), 1, battery.size(), f);
+                std::fclose(f);
+                std::printf("  written to %s\n", path);
+            }
+        }
+    }
     return 0;
 }
 

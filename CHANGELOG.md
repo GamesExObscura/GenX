@@ -17,12 +17,17 @@
   controller's select line, before the line has risen on real hardware. GenX
   treated the line as risen at once, and now waits for it the way a real
   controller does.
+- **QuackShot (Rev A): no more black screen** (issue #11). The 512 KB dump of
+  this cartridge stores its two ROM chips back to back. The game expects the
+  second chip at a higher address, so loaded as-is it never started. GenX now
+  rebuilds the layout the game expects, the same as the 1.25 MB dump.
 - **Triple Play Gold Edition and Triple Play 96: the Game Setup menu is back**
   (issue #8). The menu showed only its heading and an empty box. These games
   slide the menu into view with a chain of mid-screen interrupts, and they
   count on one extra interrupt that GenX's line counter left out. The chain
   ran one step behind, so the menu never scrolled into place. Both games now
-  use the counting rule they need.
+  use the counting rule they need. The credits on the title screen, missing
+  for the same reason, are back too.
 - **Fantastic Dizzy: no more buzzing in the inventory menu** (issue #20). On
   a real console, the FM sound chip is reset whenever the game resets the
   sound processor. Dizzy does that when the menu opens, which silences the

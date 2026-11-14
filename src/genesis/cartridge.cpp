@@ -73,6 +73,25 @@ void deinterleave_smd_block(const std::uint8_t* source, std::uint8_t* destinatio
     }
 }
 
+// A DUMP OF THE CHIPS, NOT OF WHAT THE 68000 SEES. QuackShot (Rev A), serial
+// "GM 00004054-01", is wired as two 256KB halves: the first at $000000 and the
+// second at $100000, with nothing in between - the header's ROM range runs to
+// $13FFFF. Most dumps store that 1.25MB picture of the bus; the 512KB one stores
+// the chip contents back to back, and loaded flat its second half sits at
+// $040000 where the game never looks, so it never gets past a black screen
+// (issue #11). Rebuilt here into the bus picture, which comes out byte for byte
+// the same as the 1.25MB dump (MD5 3d79d2fc...), the gap zero-filled as that
+// dump has it. Genesis Plus GX special-cases the same cartridge.
+static void rebuild_split_chip_dump(std::vector<std::uint8_t>& rom, const RomHeader& header) {
+    if (rom.size() == 0x80000 && header.serial.find("00004054-01") != std::string::npos &&
+        header.rom_end == 0x13FFFF) {
+        std::vector<std::uint8_t> bus(0x140000, 0x00);
+        std::copy(rom.begin(), rom.begin() + 0x40000, bus.begin());
+        std::copy(rom.begin() + 0x40000, rom.end(), bus.begin() + 0x100000);
+        rom = std::move(bus);
+    }
+}
+
 bool Cartridge::load(const std::filesystem::path& path, std::string& error) {
     // read_rom_file unwraps a .zip transparently, so everything below sees the
     // cartridge image whether or not it arrived compressed.
@@ -102,6 +121,7 @@ bool Cartridge::load(const std::filesystem::path& path, std::string& error) {
 
     parse_header();
     if (plausible()) {
+        rebuild_split_chip_dump(rom_, header_);
         return true;
     }
 

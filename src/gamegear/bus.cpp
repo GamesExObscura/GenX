@@ -104,8 +104,21 @@ std::uint8_t GameGearBus::in(std::uint8_t port) noexcept {
     // four addresses left every mirror reading FFh, a permanent "no buttons
     // pressed" - Prince of Persia reads DE.
     if (port >= 0xC0) {
-        return (port & 0x01) == 0 ? system_control_->read_port(0xC0)
-                                  : system_control_->read_port(0xC1);
+        const bool port_b = (port & 0x01) != 0;
+        auto value = system_control_->read_port(port_b ? 0xC1 : 0xC0);
+        // A Light Phaser or paddle in a Master System's port 1. The gun needs
+        // to know where the beam is at this instant, and the edge its sensor
+        // makes latches the VDP's H counter.
+        if (system_control_->peripheral() != SmsPeripheral::control_pad &&
+            vdp_->display_mode() == Vdp::DisplayMode::master_system) {
+            int latch = -1;
+            value = system_control_->read_controller(port_b, value, vdp_->read_v_counter(),
+                                                     vdp_->live_h_counter(), latch);
+            if (latch >= 0) {
+                vdp_->latch_h_counter(static_cast<std::uint8_t>(latch));
+            }
+        }
+        return value;
     }
 
     switch (port) {
@@ -148,6 +161,12 @@ void GameGearBus::out(std::uint8_t port, std::uint8_t value) noexcept {
         case 0x05:
         case 0x06:
             system_control_->write_port(port, value);
+            break;
+        case 0x3F:
+            // The Master System's I/O control: TH/TR direction and level for
+            // both controller ports. A paddle reads TH from it, and a Light
+            // Phaser only works while its TH is an input.
+            system_control_->write_io_control(value);
             break;
         default:
             break;

@@ -893,6 +893,7 @@ void Vdp::reset() noexcept {
     set_v_counter_from_scanline();
     h_counter_ = compute_h_counter(cycles_into_scanline_);
     latch_sprite_registers();
+    clear_h_latch();
 }
 
 void Vdp::latch_sprite_registers() noexcept {
@@ -1048,7 +1049,7 @@ std::uint8_t Vdp::read_v_counter() const noexcept {
 }
 
 std::uint8_t Vdp::read_h_counter() const noexcept {
-    return h_counter_;
+    return h_latch_valid_ ? h_latch_ : h_counter_;
 }
 
 std::uint8_t Vdp::read_data() noexcept {

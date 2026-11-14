@@ -217,6 +217,10 @@ enum class PadKind { three_button, six_button, justifier, menacer, miracle_piano
 // forces it and the dropdown greys out.
 enum class InputDevice { keyboard, xinput, dinput, mouse };
 
+// The Master System's port 1, chosen from the Emulation menu. Automatic is the
+// device the cartridge was made for (GameGear::cartridge_device).
+enum class SmsDeviceChoice { automatic, control_pad, light_phaser, paddle };
+
 bool kind_is_light_gun(PadKind kind) {
     return kind == PadKind::justifier || kind == PadKind::menacer;
 }
@@ -529,6 +533,15 @@ struct RuntimeState {
     // Sega CD > 32X plugged in. Off runs every disc on a Sega CD alone - see
     // Genesis::set_cd_32x. With no 32X BIOS it is unplugged regardless.
     bool cd_32x = true;
+    // Emulation > Master System controller: what is in port 1 when a Master
+    // System cartridge runs. Automatic plugs in the device the game was made
+    // for - a Light Phaser or the paddle - and the pad for everything else.
+    SmsDeviceChoice sms_port1 = SmsDeviceChoice::automatic;
+    // The paddle's knob. Kept here, not read straight off the pointer, so the
+    // pad's left and right can turn it as well: the mouse only moves it when
+    // the mouse moves.
+    int sms_paddle_position = 128;
+    LONG sms_last_mouse_x = LONG_MIN;
     int view_scale = 0;  // 0 = the per-machine default
     Aspect aspect = Aspect::stretch;
     int custom_aspect_width = 16;
@@ -4148,6 +4161,11 @@ void load_settings(RuntimeState& state) {
             state.check_for_updates = value != "0";
         } else if (key == "cd_32x") {
             state.cd_32x = value != "0";
+        } else if (key == "sms_port1") {
+            state.sms_port1 = value == "pad"      ? SmsDeviceChoice::control_pad
+                              : value == "phaser" ? SmsDeviceChoice::light_phaser
+                              : value == "paddle" ? SmsDeviceChoice::paddle
+                                                  : SmsDeviceChoice::automatic;
         } else if (key == "view_scale") {
             const int scale = std::atoi(value.c_str());
             if (scale >= 0 && scale <= 4) {
@@ -4326,6 +4344,12 @@ void save_settings(const RuntimeState& state) {
     out << "hide_cursor=" << (state.hide_cursor ? 1 : 0) << "\n";
     out << "check_for_updates=" << (state.check_for_updates ? 1 : 0) << "\n";
     out << "cd_32x=" << (state.cd_32x ? 1 : 0) << "\n";
+    out << "sms_port1="
+        << (state.sms_port1 == SmsDeviceChoice::control_pad    ? "pad"
+            : state.sms_port1 == SmsDeviceChoice::light_phaser ? "phaser"
+            : state.sms_port1 == SmsDeviceChoice::paddle       ? "paddle"
+                                                               : "auto")
+        << "\n";
     out << "view_scale=" << state.view_scale << "\n";
     out << "aspect=" << static_cast<int>(state.aspect) << "\n";
     out << "custom_aspect_width=" << state.custom_aspect_width << "\n";
@@ -5006,6 +5030,13 @@ HMENU build_menu(RuntimeState& state) {
     AppendMenuW(emulation, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(emulation, MF_STRING, IDM_EMU_CONFIGURE, L"&Configure...");
     AppendMenuW(emulation, MF_STRING, IDM_EMU_REPAIR_GUNS, L"Re-pair &light guns");
+    HMENU sms_port = CreatePopupMenu();
+    AppendMenuW(sms_port, MF_STRING, IDM_SMS_PORT1_AUTO, L"&Automatic (by game)");
+    AppendMenuW(sms_port, MF_STRING, IDM_SMS_PORT1_PAD, L"Control &Pad");
+    AppendMenuW(sms_port, MF_STRING, IDM_SMS_PORT1_PHASER, L"&Light Phaser");
+    AppendMenuW(sms_port, MF_STRING, IDM_SMS_PORT1_PADDLE, L"P&addle Control");
+    AppendMenuW(emulation, MF_POPUP, reinterpret_cast<UINT_PTR>(sms_port),
+                L"&Master System controller");
     AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(emulation), L"&Emulation");
 
     HMENU view = CreatePopupMenu();
@@ -5415,6 +5446,12 @@ void sync_menu_state(const RuntimeState& state) {
     // Plugging hardware in or out is a power cycle, which a netplay session
     // cannot take from one end only.
     CheckMenuItem(state.menu, IDM_CD_32X, MF_BYCOMMAND | (state.cd_32x ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuRadioItem(state.menu, IDM_SMS_PORT1_AUTO, IDM_SMS_PORT1_PADDLE,
+                       state.sms_port1 == SmsDeviceChoice::control_pad    ? IDM_SMS_PORT1_PAD
+                       : state.sms_port1 == SmsDeviceChoice::light_phaser ? IDM_SMS_PORT1_PHASER
+                       : state.sms_port1 == SmsDeviceChoice::paddle       ? IDM_SMS_PORT1_PADDLE
+                                                                          : IDM_SMS_PORT1_AUTO,
+                       MF_BYCOMMAND);
     EnableMenuItem(state.menu, IDM_CD_32X,
                    MF_BYCOMMAND | (state.netplay.active() ? MF_GRAYED : MF_ENABLED));
 
@@ -5773,6 +5810,10 @@ void load_cheats(RuntimeState& state) {
 // and the Sega CD booted with an empty tray - and the second one has no path
 // at all. Duplicating twenty lines of bookkeeping is how one of them ends up
 // forgetting to clear the rewind history.
+mercury::gamegear::SmsPeripheral sms_device_in_use(const RuntimeState& state);
+void update_sms_port1(RuntimeState& state);
+void announce_sms_port1(RuntimeState& state);
+
 void finish_loading_machine(RuntimeState& state, Machine machine,
                             const std::filesystem::path& path, int gain) {
     state.machine = machine;
@@ -5826,6 +5867,12 @@ void finish_loading_machine(RuntimeState& state, Machine machine,
     // that it only ever gets found by someone reading the Input tab.
     if (shared_pad_game(state)) {
         set_status(state, L"Two players on one Game Gear: P1 d-pad, P2 buttons A and B");
+    }
+    // A Light Phaser or paddle game: plug the device in now, so the very first
+    // frame already reads it, and say how it is played.
+    if (machine == Machine::game_gear) {
+        update_sms_port1(state);
+        announce_sms_port1(state);
     }
     // Both halves of a Gear Link run the same cartridge, so opening one here
     // opens it on the other console too. Nothing to mirror without a file.
@@ -9154,7 +9201,11 @@ bool light_gun_selected(const RuntimeState& state) {
 
 // A gun is plugged in AND it is one that needs a sight drawn for it. See
 // kind_draws_crosshair: a Menacer game already has one and does not want two.
+// A Master System Light Phaser needs one too: no Phaser game draws a sight.
 bool crosshair_wanted(const RuntimeState& state) {
+    if (state.machine == Machine::game_gear) {
+        return sms_device_in_use(state) == mercury::gamegear::SmsPeripheral::light_phaser;
+    }
     return kind_draws_crosshair(state.players[0].kind) ||
            kind_draws_crosshair(state.players[1].kind);
 }
@@ -9652,6 +9703,102 @@ void update_light_gun_aim(RuntimeState& state) {
     }
 }
 
+// --- Master System port 1: the Light Phaser and the paddle ------------------
+
+// The device really in port 1 at the moment. Only a Master System cartridge
+// has the port; and netplay carries pad buttons and nothing else - no pointer
+// - so a session plays on the pad whatever the menu says.
+mercury::gamegear::SmsPeripheral sms_device_in_use(const RuntimeState& state) {
+    using mercury::gamegear::SmsPeripheral;
+    if (!state.rom_loaded || state.machine != Machine::game_gear || state.netplay.active() ||
+        state.game_gear.vdp().display_mode() !=
+            mercury::gamegear::Vdp::DisplayMode::master_system) {
+        return SmsPeripheral::control_pad;
+    }
+    switch (state.sms_port1) {
+        case SmsDeviceChoice::control_pad: return SmsPeripheral::control_pad;
+        case SmsDeviceChoice::light_phaser: return SmsPeripheral::light_phaser;
+        case SmsDeviceChoice::paddle: return SmsPeripheral::paddle;
+        case SmsDeviceChoice::automatic:
+        default: return state.game_gear.cartridge_device().peripheral;
+    }
+}
+
+// Once a frame, before the machine runs: plug in the device and tell it what
+// the player is doing. The Phaser is aimed with the pointer, exactly like the
+// Mega Drive guns (client_to_gun), and fired with the left button or the
+// pad's button 1. The paddle's knob follows the pointer across the picture
+// while the mouse moves, and the pad's left and right turn it too.
+void update_sms_port1(RuntimeState& state) {
+    using mercury::gamegear::SmsPeripheral;
+    if (!state.rom_loaded || state.machine != Machine::game_gear || state.window == nullptr) {
+        return;
+    }
+    auto& control = state.game_gear.mutable_system_control();
+    const auto device = sms_device_in_use(state);
+    control.set_peripheral(device);
+    if (device == SmsPeripheral::control_pad) {
+        return;
+    }
+    POINT at{};
+    GetCursorPos(&at);
+    ScreenToClient(state.window, &at);
+    std::uint32_t x = 0;
+    std::uint32_t y = 0;
+    const bool on_screen = client_to_gun(state, at, x, y);
+    const auto& pad = state.game_gear.input_state();
+    const bool button = state.mouse_left_down || pad.is_pressed(Button::button1);
+    if (device == SmsPeripheral::light_phaser) {
+        control.set_phaser(static_cast<int>(x), static_cast<int>(y), on_screen, button);
+        return;
+    }
+    if (on_screen && at.x != state.sms_last_mouse_x) {
+        const auto width = std::max<std::uint32_t>(static_cast<std::uint32_t>(state.presented_width), 2);
+        state.sms_paddle_position = static_cast<int>(x * 255 / (width - 1));
+    }
+    state.sms_last_mouse_x = at.x;
+    if (pad.is_pressed(Button::left)) {
+        state.sms_paddle_position -= 4;
+    }
+    if (pad.is_pressed(Button::right)) {
+        state.sms_paddle_position += 4;
+    }
+    state.sms_paddle_position = std::clamp(state.sms_paddle_position, 0, 255);
+    control.set_paddle(static_cast<std::uint8_t>(state.sms_paddle_position), button);
+}
+
+// The status line for whatever is in port 1, said once when it changes.
+void announce_sms_port1(RuntimeState& state) {
+    using mercury::gamegear::SmsPeripheral;
+    switch (sms_device_in_use(state)) {
+        case SmsPeripheral::light_phaser:
+            set_status(state, L"Light Phaser in port 1: aim with the mouse, click to fire "
+                              L"(Emulation > Master System controller)");
+            break;
+        case SmsPeripheral::paddle:
+            set_status(state, L"Paddle Control in port 1: move the mouse left and right to turn it, "
+                              L"click for its button (Emulation > Master System controller)");
+            break;
+        default:
+            break;
+    }
+}
+
+void choose_sms_port1(RuntimeState& state, SmsDeviceChoice choice) {
+    state.sms_port1 = choice;
+    save_settings(state);
+    update_sms_port1(state);
+    sync_menu_state(state);
+    if (state.rom_loaded && state.machine == Machine::game_gear &&
+        state.game_gear.vdp().display_mode() == mercury::gamegear::Vdp::DisplayMode::master_system) {
+        if (sms_device_in_use(state) == mercury::gamegear::SmsPeripheral::control_pad) {
+            set_status(state, L"Control Pad in port 1");
+        } else {
+            announce_sms_port1(state);
+        }
+    }
+}
+
 // One frame of emulation, shared by the main loop and by the timer that keeps
 // the machine running while Windows has a modal loop of its own open. Holding a
 // menu down used to freeze the game; nothing pauses now except the Pause item
@@ -9670,6 +9817,7 @@ void step_one_frame(RuntimeState& state) {
     // that is about to run, so the position has to be current before it starts.
     poll_gamepads(state);
     update_light_gun_aim(state);
+    update_sms_port1(state);
 
     // A frame can pump messages (the audio device, a fault box), and a timer
     // firing inside that would step the machine twice from one frame's budget.
@@ -11523,6 +11671,18 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
                     return 0;
                 case IDM_CD_32X:
                     toggle_cd_32x(*state);
+                    return 0;
+                case IDM_SMS_PORT1_AUTO:
+                    choose_sms_port1(*state, SmsDeviceChoice::automatic);
+                    return 0;
+                case IDM_SMS_PORT1_PAD:
+                    choose_sms_port1(*state, SmsDeviceChoice::control_pad);
+                    return 0;
+                case IDM_SMS_PORT1_PHASER:
+                    choose_sms_port1(*state, SmsDeviceChoice::light_phaser);
+                    return 0;
+                case IDM_SMS_PORT1_PADDLE:
+                    choose_sms_port1(*state, SmsDeviceChoice::paddle);
                     return 0;
                 case IDM_CHEAT_GAME_GENIE:
                     show_game_genie(*state);

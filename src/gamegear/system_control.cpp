@@ -28,6 +28,81 @@ void SystemControl::reset() noexcept {
     pal_mode_ = false;
     input_.reset();
     reset_link_hardware();
+    reset_peripheral_state();
+}
+
+// ---- Master System controller port 1 -------------------------------------
+
+std::uint8_t SystemControl::read_controller(bool port_b, std::uint8_t value,
+                                            std::uint8_t v_counter, std::uint8_t h_counter,
+                                            int& latch) noexcept {
+    switch (peripheral_) {
+        case SmsPeripheral::light_phaser: {
+            // THE SENSOR. While the beam passes near where the gun points it
+            // pulls TH low - if TH is an input at all (port $3F bit 1) - and
+            // the VDP latches its H counter on that edge. The window is the
+            // one Genesis Plus GX uses, which plays the whole Phaser library:
+            // within 5 lines and 60 pixels of the sight. The latch is the
+            // sight's own X plus the gun's delay, not wherever the beam has
+            // got to by the time the game reads the port.
+            bool th_low = false;
+            if (phaser_on_screen_ && (io_control_ & 0x02) != 0) {
+                const int dy = phaser_y_ - static_cast<int>(v_counter);
+                const int dx = phaser_x_ - static_cast<int>(h_counter) * 2;
+                if (dy >= -5 && dy <= 5 && dx >= -60 && dx <= 60) {
+                    th_low = true;
+                    const int at = phaser_x_offset_ + phaser_x_ / 2;
+                    latch = at < 0 ? 0 : (at > 0xFF ? 0xFF : at);
+                }
+            }
+            if (!port_b) {
+                // Port 1's lines on $DC: no directions and no TR on a gun, so
+                // they all read high; the trigger is TL. Bits 6-7 are port 2.
+                value = static_cast<std::uint8_t>((value & 0xC0) | 0x3F);
+                if (phaser_trigger_) {
+                    value &= static_cast<std::uint8_t>(~0x10);
+                }
+            } else if (th_low) {
+                value &= static_cast<std::uint8_t>(~0x40);  // port 1's TH on $DD
+            }
+            return value;
+        }
+        case SmsPeripheral::paddle: {
+            // WHICH HALF OF THE POSITION. The paddle was sold for Japanese
+            // consoles, which never drive TH, and on one it flips between the
+            // halves by itself, about every 31 microseconds; counted here in
+            // port reads, a flip every third one, as Genesis Plus GX does.
+            // (An export console that drives TH picks the half with its level,
+            // and the games know both ways - Galactic Protector has both read
+            // routines. But this Master System answers the region check the
+            // way a Japanese one does: TH written as an output does not read
+            // back. Galactic Protector's check then leaves $3F at $55, TH
+            // still an output, and following that level kept the paddle on the
+            // low half for good - the TR wait gave up and the ship never
+            // moved. So the paddle here always runs free, like the console it
+            // is talking to.)
+            if (++paddle_reads_ > 2) {
+                paddle_reads_ = 0;
+                paddle_high_nibble_ = !paddle_high_nibble_;
+            }
+            if (!port_b) {
+                value &= 0xC0;  // port 2's up/down stay as they are
+                if (!paddle_button_) {
+                    value |= 0x10;
+                }
+                if (paddle_high_nibble_) {
+                    value |= static_cast<std::uint8_t>(0x20 | (paddle_position_ >> 4));
+                } else {
+                    // TR low marks the low nibble.
+                    value |= static_cast<std::uint8_t>(paddle_position_ & 0x0F);
+                }
+            }
+            return value;
+        }
+        case SmsPeripheral::control_pad:
+        default:
+            return value;
+    }
 }
 
 std::uint8_t SystemControl::peek_port(std::uint8_t port) const noexcept {

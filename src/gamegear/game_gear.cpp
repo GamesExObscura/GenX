@@ -52,6 +52,14 @@ mercury::core::RomLoadResult GameGear::load_rom(const std::filesystem::path& pat
     reset();
     // Per-cartridge serial quirk, applied after reset because reset clears it.
     system_control_.set_tx_holding_register(wants_tx_holding_register(result.image.bytes));
+    // A Master System Light Phaser or paddle game gets its device plugged in;
+    // everything else, and every Game Gear game, the pad. The host can still
+    // choose another.
+    cartridge_device_ = vdp_.display_mode() == Vdp::DisplayMode::master_system
+                            ? sms_device_for_rom(result.image.bytes)
+                            : SmsCartridgeDevice{};
+    system_control_.set_peripheral(cartridge_device_.peripheral);
+    system_control_.set_phaser_x_offset(cartridge_device_.phaser_x_offset);
     return result;
 }
 

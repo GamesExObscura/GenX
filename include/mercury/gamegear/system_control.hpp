@@ -6,6 +6,7 @@
 
 #include "mercury/gamegear/gear_link.hpp"
 #include "mercury/gamegear/input_state.hpp"
+#include "mercury/gamegear/sms_peripherals.hpp"
 
 namespace mercury::gamegear {
 
@@ -45,6 +46,39 @@ public:
         port_trace_ = trace;
         port_trace_user_ = user;
     }
+
+    // ---- Master System controller port 1 ---------------------------------
+    //
+    // Which device is plugged in. Like the holding register below this
+    // describes the setup, not the machine, so reset() leaves it alone.
+    void set_peripheral(SmsPeripheral peripheral) noexcept { peripheral_ = peripheral; }
+    [[nodiscard]] SmsPeripheral peripheral() const noexcept { return peripheral_; }
+    void set_phaser_x_offset(int offset) noexcept { phaser_x_offset_ = offset; }
+    // Where the Light Phaser points, in pixels of the 256x192 picture, and the
+    // trigger. Off screen, the sensor sees nothing.
+    void set_phaser(int x, int y, bool on_screen, bool trigger) noexcept {
+        phaser_x_ = x;
+        phaser_y_ = y;
+        phaser_on_screen_ = on_screen;
+        phaser_trigger_ = trigger;
+    }
+    // The paddle's knob, 0-255, and its button.
+    void set_paddle(std::uint8_t position, bool button) noexcept {
+        paddle_position_ = position;
+        paddle_button_ = button;
+    }
+    [[nodiscard]] std::uint8_t paddle_position() const noexcept { return paddle_position_; }
+    // Port $3F: TH and TR direction (bits 0-3, 1 = input) and output level
+    // (bits 4-7) for both controller ports.
+    void write_io_control(std::uint8_t value) noexcept { io_control_ = value; }
+    [[nodiscard]] std::uint8_t io_control() const noexcept { return io_control_; }
+    // A controller-port read with port 1's device applied to `value`, the
+    // pad state the plain read produced. The beam's position at the moment of
+    // the read is what a Light Phaser sees. When the sensor pulls TH low,
+    // `latch` receives the H counter value the VDP latches on that edge.
+    [[nodiscard]] std::uint8_t read_controller(bool port_b, std::uint8_t value,
+                                               std::uint8_t v_counter, std::uint8_t h_counter,
+                                               int& latch) noexcept;
 
     // Hold a write to $03 that lands while a byte is going out, instead of
     // dropping it. Off by default and turned on per cartridge - see
@@ -230,6 +264,25 @@ private:
             sanitize_loaded();
         }
     }
+    // Game Gear state version 6 appends what the Master System's port 1 holds
+    // between reads: the I/O control register and the paddle's nibble
+    // flip-flop. Which device is plugged in, where it points and what is
+    // pressed come from the host, like the pad buttons.
+    template <typename Archive>
+    void visit_peripheral_state(Archive& ar) {
+        ar(io_control_);
+        ar(paddle_high_nibble_);
+        ar(paddle_reads_);
+        if constexpr (Archive::loading()) {
+            paddle_reads_ %= 3;
+        }
+    }
+    void reset_peripheral_state() noexcept {
+        io_control_ = 0xFF;
+        paddle_high_nibble_ = true;
+        paddle_reads_ = 0;
+    }
+
     // A loaded state can come from someone else - over netplay with a Gear
     // Link, or a shared file. Serial timings and scheduled bit times the
     // hardware could never hold are brought back into range, so none of them
@@ -248,6 +301,20 @@ private:
     // Deliberately NOT cleared by reset(): it describes the cartridge in the
     // slot, not the machine's state, and reset() runs during load_rom.
     bool tx_holding_register_ = false;
+
+    // Port 1's device and what the host says it is doing (not reset - see
+    // set_peripheral), then the state it keeps between reads (reset).
+    SmsPeripheral peripheral_ = SmsPeripheral::control_pad;
+    int phaser_x_offset_ = 20;
+    int phaser_x_ = 0;
+    int phaser_y_ = 0;
+    bool phaser_on_screen_ = false;
+    bool phaser_trigger_ = false;
+    std::uint8_t paddle_position_ = 0x80;
+    bool paddle_button_ = false;
+    std::uint8_t io_control_ = 0xFF;
+    bool paddle_high_nibble_ = true;
+    std::uint8_t paddle_reads_ = 0;
 
   public:
     // Does this game touch the link cable at all, and when?

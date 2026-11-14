@@ -28,6 +28,7 @@ namespace {
 
 using mercury::gamegear::Button;
 using mercury::gamegear::GameGear;
+using mercury::gamegear::SmsPeripheral;
 
 std::string hex8(std::uint8_t value) {
     char buffer[8];
@@ -798,6 +799,70 @@ int main(int argc, char** argv) {
         game_gear.mutable_vdp().set_sprite_latch_cycle_for_probe(cycle);
         std::cout << "sprite latch cycle: " << cycle << " (MERCURY_GG_SPRITE_LATCH)\n";
     }
+    // The Master System port 1 device the cartridge asked for, and the probe's
+    // hands on it. MERCURY_SMS_AIM="x,y" points a Light Phaser (pixels of the
+    // 256x192 picture) and MERCURY_SMS_PADDLE="v" sets a paddle (0-255); either
+    // can instead be a script, "frame:x:y;frame:x:y" / "frame:v;frame:v", each
+    // entry holding from its frame on. Button 1 presses (--press b1@F:N) are
+    // the trigger or the paddle's button. MERCURY_SMS_DEVICE=pad|phaser|paddle
+    // overrides the choice.
+    struct AimStep { int frame; int x; int y; };
+    std::vector<AimStep> sms_aim{{0, 128, 96}};
+    std::vector<std::pair<int, int>> sms_paddle{{0, 128}};
+    if (const char* d = std::getenv("MERCURY_SMS_DEVICE"); d != nullptr && *d != '\0') {
+        const std::string device(d);
+        game_gear.mutable_system_control().set_peripheral(
+            device == "phaser" ? SmsPeripheral::light_phaser
+            : device == "paddle" ? SmsPeripheral::paddle : SmsPeripheral::control_pad);
+    }
+    if (const char* a = std::getenv("MERCURY_SMS_AIM"); a != nullptr && *a != '\0') {
+        sms_aim.clear();
+        std::string text(a);
+        if (text.find(':') == std::string::npos) {
+            int x = 128, y = 96;
+            std::sscanf(text.c_str(), "%d,%d", &x, &y);
+            sms_aim.push_back({0, x, y});
+        } else {
+            std::size_t pos = 0;
+            while (pos < text.size()) {
+                const auto end = text.find(';', pos);
+                const auto piece = text.substr(pos, end == std::string::npos ? std::string::npos : end - pos);
+                AimStep step{0, 128, 96};
+                if (std::sscanf(piece.c_str(), "%d:%d:%d", &step.frame, &step.x, &step.y) == 3) {
+                    sms_aim.push_back(step);
+                }
+                if (end == std::string::npos) break;
+                pos = end + 1;
+            }
+        }
+    }
+    if (const char* p = std::getenv("MERCURY_SMS_PADDLE"); p != nullptr && *p != '\0') {
+        sms_paddle.clear();
+        std::string text(p);
+        if (text.find(':') == std::string::npos) {
+            sms_paddle.emplace_back(0, std::atoi(text.c_str()));
+        } else {
+            std::size_t pos = 0;
+            while (pos < text.size()) {
+                const auto end = text.find(';', pos);
+                const auto piece = text.substr(pos, end == std::string::npos ? std::string::npos : end - pos);
+                int frame = 0, value = 128;
+                if (std::sscanf(piece.c_str(), "%d:%d", &frame, &value) == 2) {
+                    sms_paddle.emplace_back(frame, value);
+                }
+                if (end == std::string::npos) break;
+                pos = end + 1;
+            }
+        }
+    }
+    {
+        const auto device = game_gear.system_control().peripheral();
+        if (device != SmsPeripheral::control_pad) {
+            std::cout << "sms port 1: "
+                      << (device == SmsPeripheral::light_phaser ? "Light Phaser" : "Paddle Control")
+                      << " (phaser latch offset " << game_gear.cartridge_device().phaser_x_offset << ")\n";
+        }
+    }
     if (!g_battery_in.empty()) {
         std::ifstream in(g_battery_in, std::ios::binary);
         const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(in)),
@@ -873,6 +938,22 @@ int main(int argc, char** argv) {
             } else {
                 ++it;
             }
+        }
+
+        if (game_gear.system_control().peripheral() != SmsPeripheral::control_pad) {
+            AimStep aim = sms_aim.front();
+            for (const auto& step : sms_aim) {
+                if (step.frame <= frame) aim = step;
+            }
+            int paddle = sms_paddle.front().second;
+            for (const auto& step : sms_paddle) {
+                if (step.first <= frame) paddle = step.second;
+            }
+            const bool fire = game_gear.input_state().is_pressed(Button::button1);
+            const bool on_screen = aim.x >= 0 && aim.y >= 0;
+            game_gear.mutable_system_control().set_phaser(aim.x, aim.y, on_screen, fire);
+            game_gear.mutable_system_control().set_paddle(
+                static_cast<std::uint8_t>(std::clamp(paddle, 0, 255)), fire);
         }
 
         last_line_irq_count = game_gear.vdp().debug_line_interrupt_count();

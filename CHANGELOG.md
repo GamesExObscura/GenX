@@ -4,6 +4,18 @@
 
 ### Added
 
+- **Master System Light Phaser and Paddle Control** (issue #5). Light Phaser
+  games are aimed with the mouse: the pointer becomes a sight, and the left
+  button (or the pad's button 1) pulls the trigger. Paddle games follow the
+  mouse left and right across the picture, and the pad's left and right turn
+  the knob too; the left button is the paddle's button. GenX plugs in the
+  right device by itself for the games that need one: Gangster Town, Safari
+  Hunt, Shooting Gallery, Marksman Shooting, Operation Wolf, Rambo III,
+  Wanted, Assault City, Laser Ghost, Space Gun, Rescue Mission, Missile
+  Defense 3-D and 3-D Gunner with the Phaser; Galactic Protector, Woody Pop,
+  Alex Kidd BMX Trial and Megumi Rescue with the paddle. **Emulation →
+  Master System controller** chooses something else, for example the pad
+  for Hang-On on the Hang-On / Safari Hunt cartridge.
 - **Sega CD → 32X plugged in.** Untick it to run Sega CD discs on a console
   with no 32X attached. Fahrenheit's first disc then plays its Sega CD version
   instead of asking for disc 2, and Surgical Strike skips its "Sega CD or 32X"

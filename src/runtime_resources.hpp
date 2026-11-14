@@ -141,6 +141,12 @@
 #define IDM_CD_SWAP_DRIVE_FIRST 40510
 #define IDM_CD_SWAP_DRIVE_LAST 40535
 #define IDM_CD_SWAP_DRIVE_NONE 40536
+// Emulation > Master System controller: the device in port 1. Consecutive,
+// for CheckMenuRadioItem.
+#define IDM_SMS_PORT1_AUTO 40540
+#define IDM_SMS_PORT1_PAD 40541
+#define IDM_SMS_PORT1_PHASER 40542
+#define IDM_SMS_PORT1_PADDLE 40543
 
 // Cheats. Its own menu for the same reason: a code is typed while playing.
 #define IDM_CHEAT_GAME_GENIE 40601

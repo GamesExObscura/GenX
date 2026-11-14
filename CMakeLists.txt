@@ -49,6 +49,7 @@ add_library(mercury
     src/genesis/cartridge.cpp
     src/genesis/eeprom.cpp
     src/genesis/spi_eeprom.cpp
+    src/gamegear/sms_peripherals.cpp
     src/genesis/game_quirks.cpp
     src/genesis/genesis.cpp
     src/genesis/io.cpp
@@ -342,6 +343,14 @@ add_executable(t5740_tests
 target_link_libraries(t5740_tests PRIVATE mercury)
 
 add_test(NAME t5740_tests COMMAND t5740_tests)
+
+add_executable(sms_peripheral_tests
+    src/tests/sms_peripheral_tests.cpp
+)
+
+target_link_libraries(sms_peripheral_tests PRIVATE mercury)
+
+add_test(NAME sms_peripheral_tests COMMAND sms_peripheral_tests)
 
 add_executable(gg_vdp_tests
     src/tests/gg_vdp_tests.cpp

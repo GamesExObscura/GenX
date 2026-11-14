@@ -54,7 +54,16 @@ public:
     [[nodiscard]] bool extended_display() const noexcept;
     void advance_cycles(std::uint32_t cpu_cycles) noexcept;
     [[nodiscard]] std::uint8_t read_v_counter() const noexcept;
+    // Port $7F. The H counter as a latch: it holds the value taken on the
+    // last TH edge from a controller port - a Light Phaser's sensor. Until a
+    // gun has latched anything it reads the live counter, as it always has
+    // here, so no other game sees a difference.
     [[nodiscard]] std::uint8_t read_h_counter() const noexcept;
+    [[nodiscard]] std::uint8_t live_h_counter() const noexcept { return h_counter_; }
+    void latch_h_counter(std::uint8_t value) noexcept {
+        h_latch_ = value;
+        h_latch_valid_ = true;
+    }
     [[nodiscard]] std::uint8_t read_data() noexcept;
     [[nodiscard]] std::uint8_t read_status() noexcept;
     void write_data(std::uint8_t value) noexcept;
@@ -172,6 +181,16 @@ private:
         ar(sprite_latch_);
     }
     void derive_sprite_latch() noexcept { latch_sprite_registers(); }
+    // Version 6 appends the H counter latch, for the same reason.
+    template <typename Archive>
+    void visit_h_latch_state(Archive& ar) {
+        ar(h_latch_);
+        ar(h_latch_valid_);
+    }
+    void clear_h_latch() noexcept {
+        h_latch_ = 0;
+        h_latch_valid_ = false;
+    }
 
     // A loaded state can come from someone else (netplay, a shared file).
     // Values the hardware could never hold are brought back into range, so
@@ -215,6 +234,8 @@ private:
     // next line's sprites are drawn with (see kSpriteLatchCycle in vdp.cpp).
     std::array<std::uint8_t, 3> sprite_latch_{};
     std::uint32_t sprite_latch_cycle_ = kSpriteLatchCycle;
+    std::uint8_t h_latch_ = 0;
+    bool h_latch_valid_ = false;
     std::uint32_t status_read_count_ = 0;
     std::uint32_t data_read_count_ = 0;
     std::uint32_t control_write_count_ = 0;

@@ -70,7 +70,9 @@ private:
     // version 3 file is laid out exactly as before and still loads.
     // 5: the VDP's sprite latch (the sprite settings it took for the next
     // line), appended after the EEPROM for the same reason.
-    static constexpr std::uint32_t kStateVersion = 5;
+    // 6: the Master System controller port's I/O control register, paddle
+    // flip-flop and the VDP's H counter latch (Light Phaser), appended again.
+    static constexpr std::uint32_t kStateVersion = 6;
 
     template <typename Archive>
     void visit_state(Archive& ar, std::uint32_t version = kStateVersion) {
@@ -91,7 +93,19 @@ private:
         } else if constexpr (Archive::loading()) {
             vdp_.derive_sprite_latch();
         }
+        if (version >= 6) {
+            system_control_.visit_peripheral_state(ar);
+            vdp_.visit_h_latch_state(ar);
+        } else if constexpr (Archive::loading()) {
+            system_control_.reset_peripheral_state();
+            vdp_.clear_h_latch();
+        }
     }
+
+    // The device this cartridge was made for (a Master System Light Phaser or
+    // paddle game), found from its CRC when it was loaded. The host plugs it
+    // in unless the player has chosen otherwise.
+    [[nodiscard]] SmsCartridgeDevice cartridge_device() const noexcept { return cartridge_device_; }
 
     // Same contract as the Mega Drive side: a header identifies the cartridge
     // so a state can be refused rather than loaded into the wrong game.
@@ -99,6 +113,7 @@ private:
     [[nodiscard]] bool load_state_blob(const std::vector<std::uint8_t>& blob, std::string& error);
 
   private:
+    SmsCartridgeDevice cartridge_device_{};
     GameGearBus bus_;
     Cartridge cartridge_;
     mercury::core::Z80Cpu cpu_;

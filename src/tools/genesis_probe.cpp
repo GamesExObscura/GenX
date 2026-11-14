@@ -3290,6 +3290,23 @@ int main(int argc, char** argv) {
         const auto& regs = machine.vdp().registers();
         std::ofstream(out / "regs.bin", std::ios::binary)
             .write(reinterpret_cast<const char*>(regs.data()), static_cast<std::streamsize>(regs.size()));
+        // CRAM as 64 big-endian words: the four 16-colour palettes.
+        {
+            std::ofstream cr(out / "cram.bin", std::ios::binary);
+            for (const auto word : machine.vdp().cram()) {
+                cr.put(static_cast<char>(word >> 8));
+                cr.put(static_cast<char>(word & 0xFF));
+            }
+        }
+        // VSRAM as 40 big-endian words: per-column vertical scroll, A then B.
+        {
+            std::ofstream vs(out / "vsram.bin", std::ios::binary);
+            for (std::uint32_t i = 0; i < 40; ++i) {
+                const auto word = machine.vdp().vsram_entry(i);
+                vs.put(static_cast<char>(word >> 8));
+                vs.put(static_cast<char>(word & 0xFF));
+            }
+        }
         // And the 68000's work RAM, for code a game runs from there.
         std::vector<std::uint8_t> wram(0x10000);
         for (std::uint32_t i = 0; i < 0x10000; i += 2) {

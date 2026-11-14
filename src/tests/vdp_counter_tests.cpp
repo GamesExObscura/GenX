@@ -100,6 +100,39 @@ int main() {
         check_value(vdp.vram()[1], 0xA0, "a write under a VRAM write command lands");
     }
 
+    // A NAME TABLE SPANS 8KB AT MOST. Trouble Shooter's intro sets plane size
+    // 128x64 - more than 4096 cells - and scrolls plane A down 256 lines to
+    // reach its portrait. On hardware row 32 of a 128-wide plane wraps back to
+    // row 0; read as a real 64-row plane it ran on into plane B's table and the
+    // centre portrait was missing.
+    {
+        using mercury::genesis::Vdp;
+        Vdp vdp;
+        vdp.reset();
+        vdp.write_control(0x8144);  // display on, mode 5
+        vdp.write_control(0x8C81);  // H40
+        vdp.write_control(0x8230);  // plane A at $C000
+        vdp.write_control(0x8407);  // plane B at $E000
+        vdp.write_control(0x9013);  // 128 x 64 cells: over the 8KB a table can span
+        vdp.write_control(0x8F02);  // auto-increment 2
+        vdp.write_control(0xC002);  // CRAM entry 1 ...
+        vdp.write_control(0x0000);
+        vdp.write_data(0x000E);     // ... bright red
+        vdp.write_control(0x4020);  // tile 1, every pixel colour 1
+        vdp.write_control(0x0000);
+        for (int i = 0; i < 16; ++i) vdp.write_data(0x1111);
+        vdp.write_control(0x4000);  // plane A, row 0, column 0 -> tile 1
+        vdp.write_control(0x0003);
+        vdp.write_data(0x0001);
+        vdp.write_control(0x4000);  // VSRAM plane A = 256: row 32 at the top
+        vdp.write_control(0x0010);
+        vdp.write_data(0x0100);
+        vdp.advance_cycles(Vdp::kM68kCyclesPerLine + 4);  // line 0 drawn
+        const auto& rgb = vdp.frame_pixels();
+        check_value(rgb.size() >= 3 ? rgb[0] : 0, 0xFF,
+                    "row 32 of a 128x64 plane wraps to row 0 (red pixel, not plane B)");
+    }
+
     std::printf("\n%s\n", failures == 0 ? "all V counter checks passed" : "FAILURES");
     return failures == 0 ? 0 : 1;
 }

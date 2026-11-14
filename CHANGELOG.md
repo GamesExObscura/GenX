@@ -17,6 +17,13 @@
   controller's select line, before the line has risen on real hardware. GenX
   treated the line as risen at once, and now waits for it the way a real
   controller does.
+- **Trouble Shooter: the intro's centre portraits are back.** Madison's and
+  Crystal's large portraits, with Madison's mouth and Crystal's eyes
+  animating, were missing from the middle of the screen. Only those animated
+  parts showed, floating between the smaller copies. The intro uses a
+  background size real hardware doesn't support, which makes its rows wrap
+  around, and GenX didn't wrap them. This also removes a strip of stray
+  tiles at the top-left of the court in Barkley Shut Up and Jam!.
 - **QuackShot (Rev A): no more black screen** (issue #11). The 512 KB dump of
   this cartridge stores its two ROM chips back to back. The game expects the
   second chip at a higher address, so loaded as-is it never started. GenX now

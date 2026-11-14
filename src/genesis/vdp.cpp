@@ -1261,7 +1261,17 @@ Vdp::PlanePixel Vdp::fetch_plane_pixel(std::uint32_t name_base, std::uint32_t pl
     const auto width_cells = plane_width_cells();
     const auto cell_x = (plane_x / 8);
     const auto cell_y = (plane_y / cell_rows);
-    const auto entry_address = name_base + ((cell_y * width_cells + cell_x) * 2);
+    // A NAME TABLE SPANS 8KB AT MOST - 4096 cells. The row's offset is cut to
+    // 13 bits, so a size that asks for more (128x64, 64x128, 128x128) wraps
+    // its rows back onto the first 8KB rather than running on into whatever
+    // follows in VRAM. For every legal size the offset already fits and this
+    // changes nothing. Trouble Shooter's intro sets 128x64 and scrolls plane A
+    // down 256 lines to reach the bright portrait at rows 7-20; read as a real
+    // 64-row plane that landed on rows 39-52, which are plane B's name table
+    // seen from the wrong side, and the centre portrait was missing. Genesis
+    // Plus GX masks the row offset the same way (& 0x1FC0).
+    const std::uint32_t row_offset = (static_cast<std::uint32_t>(cell_y) * width_cells * 2u) & 0x1FC0u;
+    const auto entry_address = name_base + row_offset + cell_x * 2u;
     const auto entry = read_vram16(entry_address & 0xFFFF);
 
     const auto tile = static_cast<std::uint32_t>(entry & (im2 ? 0x03FFu : 0x07FFu));

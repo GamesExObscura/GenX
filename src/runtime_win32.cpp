@@ -562,6 +562,16 @@ struct RuntimeState {
     // the mouse moves.
     int sms_paddle_position = 128;
     LONG sms_last_mouse_x = LONG_MIN;
+    // Emulation > Plug in light guns by game: a Mega Drive or Sega CD gun game
+    // gets its gun in player 2's seat (port 2, where every gun goes) while it
+    // runs, unless a player already has a gun or the piano. Player 2's own
+    // controller is put back when the game goes, and it is what the settings
+    // file keeps meanwhile - see piano_saved_input.
+    bool auto_light_gun = true;
+    bool auto_gun_active = false;
+    PadKind auto_gun_kind = PadKind::three_button;
+    PadKind auto_gun_saved_kind = PadKind::three_button;
+    InputDevice auto_gun_saved_device = InputDevice::keyboard;
     int view_scale = 0;  // 0 = the per-machine default
     Aspect aspect = Aspect::stretch;
     int custom_aspect_width = 16;
@@ -913,6 +923,8 @@ struct SavedInputChoice {
 };
 [[nodiscard]] SavedInputChoice piano_saved_input(const RuntimeState& state, int player);
 [[nodiscard]] bool piano_owner_is(const RuntimeState* state);
+// A gun lent to player 2's seat by the running game - see apply_auto_gun.
+void release_auto_gun(RuntimeState& state);
 // Adds the keyboard's own voice on top of the console's output. Declared here
 // because the Mega Drive mixer calls it and is defined long before the
 // synthesiser is.
@@ -4199,6 +4211,8 @@ void load_settings(RuntimeState& state) {
             state.check_for_updates = value != "0";
         } else if (key == "cd_32x") {
             state.cd_32x = value != "0";
+        } else if (key == "auto_light_gun") {
+            state.auto_light_gun = value != "0";
         } else if (key == "sms_port1") {
             state.sms_port1 = value == "pad"      ? SmsDeviceChoice::control_pad
                               : value == "phaser" ? SmsDeviceChoice::light_phaser
@@ -4382,6 +4396,7 @@ void save_settings(const RuntimeState& state) {
     out << "hide_cursor=" << (state.hide_cursor ? 1 : 0) << "\n";
     out << "check_for_updates=" << (state.check_for_updates ? 1 : 0) << "\n";
     out << "cd_32x=" << (state.cd_32x ? 1 : 0) << "\n";
+    out << "auto_light_gun=" << (state.auto_light_gun ? 1 : 0) << "\n";
     out << "sms_port1="
         << (state.sms_port1 == SmsDeviceChoice::control_pad    ? "pad"
             : state.sms_port1 == SmsDeviceChoice::light_phaser ? "phaser"
@@ -5068,6 +5083,7 @@ HMENU build_menu(RuntimeState& state) {
     AppendMenuW(emulation, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(emulation, MF_STRING, IDM_EMU_CONFIGURE, L"&Configure...");
     AppendMenuW(emulation, MF_STRING, IDM_EMU_REPAIR_GUNS, L"Re-pair &light guns");
+    AppendMenuW(emulation, MF_STRING, IDM_EMU_AUTO_GUN, L"Plug in light &guns by game");
     HMENU sms_port = CreatePopupMenu();
     AppendMenuW(sms_port, MF_STRING, IDM_SMS_PORT1_AUTO, L"&Automatic (by game)");
     AppendMenuW(sms_port, MF_STRING, IDM_SMS_PORT1_PAD, L"Control &Pad");
@@ -5484,6 +5500,8 @@ void sync_menu_state(const RuntimeState& state) {
     // Plugging hardware in or out is a power cycle, which a netplay session
     // cannot take from one end only.
     CheckMenuItem(state.menu, IDM_CD_32X, MF_BYCOMMAND | (state.cd_32x ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuItem(state.menu, IDM_EMU_AUTO_GUN,
+                  MF_BYCOMMAND | (state.auto_light_gun ? MF_CHECKED : MF_UNCHECKED));
     CheckMenuRadioItem(state.menu, IDM_SMS_PORT1_AUTO, IDM_SMS_PORT1_PADDLE,
                        state.sms_port1 == SmsDeviceChoice::control_pad    ? IDM_SMS_PORT1_PAD
                        : state.sms_port1 == SmsDeviceChoice::light_phaser ? IDM_SMS_PORT1_PHASER
@@ -5623,6 +5641,8 @@ void unload_rom(RuntimeState& state) {
     state.rom_loaded = false;
     state.paused = false;
     state.faulted = false;
+    // A gun the game had plugged in goes with it.
+    release_auto_gun(state);
     // The history belongs to the cartridge that is going away.
     state.rewind_history.clear();
     state.rewind_countdown = 0;
@@ -5852,6 +5872,124 @@ mercury::gamegear::SmsPeripheral sms_device_in_use(const RuntimeState& state);
 void update_sms_port1(RuntimeState& state);
 void announce_sms_port1(RuntimeState& state);
 
+// --- Mega Drive / Sega CD light gun games -------------------------------------
+
+// The gun a Mega Drive cartridge or Sega CD disc is made for, from its header,
+// or three_button for anything else. Snatcher is left out on purpose: it is an
+// adventure that takes a Justifier only for its shooting sections, and is
+// played on the pad. The Menacer works with Corpse Killer and American Laser
+// Games' discs as well as Sega's own; Lethal Enforcers needs the Justifier.
+PadKind game_light_gun(const RuntimeState& state) {
+    if (!state.rom_loaded || state.machine != Machine::genesis) {
+        return PadKind::three_button;
+    }
+    const auto upper = [](std::string text) {
+        std::transform(text.begin(), text.end(), text.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+        return text;
+    };
+    const auto has = [](const std::string& text, const char* needle) {
+        return text.find(needle) != std::string::npos;
+    };
+    if (state.genesis.cd_mode()) {
+        const auto title = upper(state.genesis.segacd().disc().title());
+        if (has(title, "LETHAL ENFORCERS")) return PadKind::justifier;
+        if (has(title, "CORPSE KILLER") || has(title, "MAD DOG") ||
+            has(title, "WHO SHOT JOHNNY ROCK") || has(title, "CRIME PATROL") ||
+            has(title, "SPACE PIRATES") || has(title, "DRUG WARS")) {
+            return PadKind::menacer;
+        }
+        return PadKind::three_button;
+    }
+    const auto& header = state.genesis.cartridge().header();
+    const auto serial = upper(header.serial);
+    const auto title = upper(header.overseas_title) + " " + upper(header.domestic_title);
+    if (has(serial, "T-95096") || has(serial, "T-95136") || has(title, "LETHAL ENFORCERS")) {
+        return PadKind::justifier;
+    }
+    if (has(serial, "MK-1658") || has(serial, "T-081156") || has(title, "MENACER") ||
+        has(title, "T2 ; THE ARCADE GAME") || has(title, "BODY COUNT")) {
+        return PadKind::menacer;
+    }
+    return PadKind::three_button;
+}
+
+// Put player 2's own controller back, if a game had lent the seat a gun.
+void release_auto_gun(RuntimeState& state) {
+    if (!state.auto_gun_active) {
+        return;
+    }
+    // Only if the gun is still there: anything else in the seat now is the
+    // player's own choice, made after the game plugged the gun in.
+    if (state.players[1].kind == state.auto_gun_kind) {
+        state.players[1].kind = state.auto_gun_saved_kind;
+        state.players[1].device = state.auto_gun_saved_device;
+    }
+    state.auto_gun_active = false;
+}
+
+// Plug in the running game's gun, if it has one and nobody has chosen a gun or
+// the piano. Netplay seats come from the host, so a session is left alone.
+void apply_auto_gun(RuntimeState& state) {
+    release_auto_gun(state);
+    if (!state.auto_light_gun || state.netplay.active() || piano_owner_is(&state)) {
+        return;
+    }
+    for (const auto& player : state.players) {
+        if (kind_is_light_gun(player.kind) || player.kind == PadKind::miracle_piano) {
+            return;
+        }
+    }
+    const PadKind gun = game_light_gun(state);
+    if (!kind_is_light_gun(gun)) {
+        return;
+    }
+    state.auto_gun_saved_kind = state.players[1].kind;
+    state.auto_gun_saved_device = state.players[1].device;
+    state.players[1].kind = gun;
+    state.players[1].device = InputDevice::mouse;
+    state.auto_gun_kind = gun;
+    state.auto_gun_active = true;
+}
+
+void announce_auto_gun(RuntimeState& state);
+
+// Emulation > Plug in light guns by game. Takes effect on the game that is
+// running, as well as the next.
+void toggle_auto_gun(RuntimeState& state) {
+    state.auto_light_gun = !state.auto_light_gun;
+    if (state.rom_loaded && state.machine == Machine::genesis) {
+        if (state.auto_light_gun) {
+            apply_auto_gun(state);
+        } else {
+            release_auto_gun(state);
+        }
+        apply_port_kinds(state);
+    }
+    save_settings(state);
+    sync_menu_state(state);
+    if (state.auto_light_gun) {
+        if (state.auto_gun_active) {
+            announce_auto_gun(state);
+        } else {
+            set_status(state, L"Light guns are plugged in by game");
+        }
+    } else {
+        set_status(state, L"Light guns are no longer plugged in by game");
+    }
+}
+
+void announce_auto_gun(RuntimeState& state) {
+    if (!state.auto_gun_active) {
+        return;
+    }
+    set_status(state, state.auto_gun_kind == PadKind::justifier
+                          ? L"Justifier plugged in for this game: aim with the mouse, left button "
+                            L"fires (Emulation > Plug in light guns by game)"
+                          : L"Menacer plugged in for this game: aim with the mouse, left button "
+                            L"fires (Emulation > Plug in light guns by game)");
+}
+
 void finish_loading_machine(RuntimeState& state, Machine machine,
                             const std::filesystem::path& path, int gain) {
     state.machine = machine;
@@ -5874,6 +6012,8 @@ void finish_loading_machine(RuntimeState& state, Machine machine,
     state.rewind_history.clear();
     state.rewind_countdown = 0;
     state.warned_no_32x_bios = false;
+    // A gun game gets its gun; the last game's gun, if it had one, goes.
+    apply_auto_gun(state);
     if (machine == Machine::genesis) {
         apply_port_kinds(state);
     }
@@ -5912,6 +6052,7 @@ void finish_loading_machine(RuntimeState& state, Machine machine,
         update_sms_port1(state);
         announce_sms_port1(state);
     }
+    announce_auto_gun(state);
     // Both halves of a Gear Link run the same cartridge, so opening one here
     // opens it on the other console too. Nothing to mirror without a file.
     if (!path.empty()) {
@@ -8377,6 +8518,11 @@ INT_PTR CALLBACK configure_proc(HWND dialog, UINT message, WPARAM wparam, LPARAM
                         }
                     }
                     state.players = draft->players;
+                    // Player 2 changed away from the gun the game lent them:
+                    // that is now their own choice, and nothing is put back.
+                    if (state.auto_gun_active && state.players[1].kind != state.auto_gun_kind) {
+                        state.auto_gun_active = false;
+                    }
                     state.sms_port1 = draft->sms_port1;
                     update_sms_port1(state);
                     state.profile_names = draft->profile_names;
@@ -9321,12 +9467,39 @@ bool light_gun_selected(const RuntimeState& state) {
     return kind_is_light_gun(state.players[0].kind) || kind_is_light_gun(state.players[1].kind);
 }
 
+// Whether the running game draws its own sight for a Menacer. Sega's Menacer
+// cartridges do. The Sega CD's American Laser Games discs and Corpse Killer
+// take the Menacer but draw nothing - Mad Dog McCree shows only the score, the
+// lives and the bullets - so for them GenX draws the sight, as it does for the
+// Justifier.
+bool menacer_game_draws_sight(const RuntimeState& state) {
+    if (!state.rom_loaded || state.machine != Machine::genesis || !state.genesis.cd_mode()) {
+        return true;
+    }
+    auto title = state.genesis.segacd().disc().title();
+    std::transform(title.begin(), title.end(), title.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    for (const char* name : {"CORPSE KILLER", "MAD DOG", "WHO SHOT JOHNNY ROCK", "CRIME PATROL",
+                             "SPACE PIRATES", "DRUG WARS"}) {
+        if (title.find(name) != std::string::npos) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // A gun is plugged in AND it is one that needs a sight drawn for it. See
-// kind_draws_crosshair: a Menacer game already has one and does not want two.
+// kind_draws_crosshair: a Menacer game already has one and does not want two -
+// unless it is one of the few that do not (menacer_game_draws_sight).
 // A Master System Light Phaser needs one too: no Phaser game draws a sight.
 bool crosshair_wanted(const RuntimeState& state) {
     if (state.machine == Machine::game_gear) {
         return sms_device_in_use(state) == mercury::gamegear::SmsPeripheral::light_phaser;
+    }
+    const bool menacer = state.players[0].kind == PadKind::menacer ||
+                         state.players[1].kind == PadKind::menacer;
+    if (menacer && !menacer_game_draws_sight(state)) {
+        return true;
     }
     return kind_draws_crosshair(state.players[0].kind) ||
            kind_draws_crosshair(state.players[1].kind);
@@ -9334,7 +9507,9 @@ bool crosshair_wanted(const RuntimeState& state) {
 
 // A gun is plugged in and the game draws the sight, so the pointer goes away.
 bool pointer_hidden_for_gun(const RuntimeState& state) {
-    return kind_hides_pointer(state.players[0].kind) || kind_hides_pointer(state.players[1].kind);
+    const bool hides = kind_hides_pointer(state.players[0].kind) ||
+                       kind_hides_pointer(state.players[1].kind);
+    return hides && menacer_game_draws_sight(state);
 }
 
 // --- two guns, two mice ------------------------------------------------------
@@ -10917,6 +11092,12 @@ SavedInputChoice piano_saved_input(const RuntimeState& state, int player) {
         choice.kind = g_piano.previous_kind;
         choice.device = g_piano.previous_device;
     }
+    // The same for a gun a game lent player 2's seat: it is the game's, not
+    // the player's, and must not end up in the settings file.
+    if (player == 1 && state.auto_gun_active && state.players[1].kind == state.auto_gun_kind) {
+        choice.kind = state.auto_gun_saved_kind;
+        choice.device = state.auto_gun_saved_device;
+    }
     return choice;
 }
 
@@ -10963,6 +11144,9 @@ void toggle_piano_window(RuntimeState& state) {
     }
 
     g_piano.owner = &state;
+    // A gun the game lent the seat makes way first, so what the piano puts
+    // back when it closes is the player's own controller.
+    release_auto_gun(state);
     // Plug the keyboard in. Player 2's slot, because the instrument lives in
     // port 2 and player 1 keeps the pad the menus are driven with.
     if (state.players[1].kind != PadKind::miracle_piano) {
@@ -11793,6 +11977,9 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
                     return 0;
                 case IDM_CD_32X:
                     toggle_cd_32x(*state);
+                    return 0;
+                case IDM_EMU_AUTO_GUN:
+                    toggle_auto_gun(*state);
                     return 0;
                 case IDM_SMS_PORT1_AUTO:
                     choose_sms_port1(*state, SmsDeviceChoice::automatic);

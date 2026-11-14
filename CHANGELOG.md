@@ -4,6 +4,20 @@
 
 ### Added
 
+- **Light gun games get their gun by themselves.** Open a Mega Drive or
+  Sega CD game made for a light gun and GenX plugs that gun into port 2 for
+  as long as the game runs, aimed with the mouse: the Menacer for the Menacer
+  6-Game Cartridge, T2: The Arcade Game, Body Count, Corpse Killer, Mad Dog
+  McCree, Mad Dog II, Who Shot Johnny Rock?, Crime Patrol, Space Pirates and
+  Drug Wars; the Justifier for Lethal Enforcers and Lethal Enforcers II
+  (cartridge and CD). Player 1 keeps the pad for the menus. Nothing changes
+  if a player has already chosen a gun, and player 2's own controller comes
+  back when the game closes. **Emulation → Plug in light guns by game** turns
+  it off.
+- **A sight for the Sega CD Menacer games that don't draw one.** Mad Dog
+  McCree and the other American Laser Games discs, and Corpse Killer, take
+  the Menacer but show no crosshair. GenX now draws its own sight for them
+  instead of hiding the pointer.
 - **Master System Light Phaser and Paddle Control** (issue #5). Light Phaser
   games are aimed with the mouse: the pointer becomes a sight, and the left
   button (or the pad's button 1) pulls the trigger. Paddle games follow the

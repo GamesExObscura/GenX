@@ -3088,6 +3088,22 @@ int main(int argc, char** argv) {
         machine.port2().set_kind(mercury::genesis::ControllerPort::Kind::none);
         std::printf("port 2: empty\n");
     }
+    // MERCURY_PORT2=menacer|justifier: a light gun in port 2, held still at
+    // MERCURY_GUN_AIM="x,y" (pixels of the picture; default the middle). The
+    // trigger is port 2's A, which MERCURY_INPUT_SCRIPT2 can pull.
+    if (const char* e = std::getenv("MERCURY_PORT2");
+        e != nullptr && (std::string(e) == "menacer" || std::string(e) == "justifier")) {
+        using Kind = mercury::genesis::ControllerPort::Kind;
+        const bool menacer = std::string(e) == "menacer";
+        machine.port2().set_kind(menacer ? Kind::menacer : Kind::justifier);
+        int aim_x = 160;
+        int aim_y = 112;
+        if (const char* a = std::getenv("MERCURY_GUN_AIM"); a != nullptr) {
+            std::sscanf(a, "%d,%d", &aim_x, &aim_y);
+        }
+        machine.port2().set_aim(static_cast<std::uint32_t>(aim_x), static_cast<std::uint32_t>(aim_y), true);
+        std::printf("port 2: %s aimed at %d,%d\n", menacer ? "Menacer" : "Justifier", aim_x, aim_y);
+    }
     // MERCURY_FORCE_NTSC=1 / MERCURY_FORCE_PAL=1: run the cartridge on the
     // other kind of console than its header picks - a "(USA, Europe)" cart
     // whose header says only E runs at 50Hz here, and at 60Hz on a US

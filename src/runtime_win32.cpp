@@ -206,7 +206,18 @@ const wchar_t* pad_button_name(PadButton button) {
 // config still loads as a Menacer.
 // miracle_piano is appended last so every kind already written into a
 // settings file keeps its number.
-enum class PadKind { three_button, six_button, justifier, menacer, miracle_piano };
+enum class PadKind { three_button, six_button, justifier, menacer, miracle_piano,
+                     // DISPLAY ONLY - the Input tab's names for the Master
+                     // System devices in player 1's list. A player's stored
+                     // kind is never one of these (settings, profiles and
+                     // netplay all clamp to miracle_piano); choosing one sets
+                     // the Master System controller (sms_port1) instead, and
+                     // player 1's Mega Drive pad stays what it was.
+                     sms_light_phaser, sms_paddle };
+
+bool kind_is_sms_device(PadKind kind) {
+    return kind == PadKind::sms_light_phaser || kind == PadKind::sms_paddle;
+}
 // Where a player's input comes from, named after the API that reads it rather
 // than after the cable. USB and Bluetooth were the wrong distinction: neither
 // API can tell them apart, because the transport is invisible to both. What
@@ -261,6 +272,15 @@ bool kind_has_button(PadKind kind, PadButton button) {
         }
     } else if (button == PadButton::gun_trigger || button == PadButton::gun_reload) {
         return false;
+    }
+    // The Master System devices are aimed or turned with the mouse; what can
+    // be bound is the pad button that fires the Phaser (button 1, the A row)
+    // and, on the paddle, its button and two keys that turn the knob.
+    if (kind == PadKind::sms_light_phaser) {
+        return button == PadButton::a;
+    }
+    if (kind == PadKind::sms_paddle) {
+        return button == PadButton::left || button == PadButton::right || button == PadButton::a;
     }
     if (kind == PadKind::justifier) {
         return button == PadButton::start;
@@ -3923,16 +3943,18 @@ struct PadArt {
 };
 
 const PadArt& pad_art(HINSTANCE instance, PadKind kind) {
-    static PadArt cache[5];
-    static bool loaded[5] = {};
+    constexpr int kArtCount = 7;
+    static PadArt cache[kArtCount];
+    static bool loaded[kArtCount] = {};
     const int index = static_cast<int>(kind);
-    if (index < 0 || index >= 5) {
+    if (index < 0 || index >= kArtCount) {
         return cache[0];
     }
     if (!loaded[index]) {
         loaded[index] = true;
-        static const int resources[5] = {IDR_PAD_3BUTTON, IDR_PAD_6BUTTON, IDR_PAD_JUSTIFIER,
-                                         IDR_PAD_MENACER, IDR_PAD_PIANO};
+        static const int resources[kArtCount] = {IDR_PAD_3BUTTON, IDR_PAD_6BUTTON, IDR_PAD_JUSTIFIER,
+                                                 IDR_PAD_MENACER, IDR_PAD_PIANO,  IDR_PAD_PHASER,
+                                                 IDR_PAD_PADDLE};
         Gdiplus::GdiplusStartupInput input;
         ULONG_PTR token = 0;
         if (Gdiplus::GdiplusStartup(&token, &input, nullptr) == Gdiplus::Ok) {
@@ -3953,8 +3975,24 @@ const wchar_t* pad_kind_name(PadKind kind) {
         case PadKind::justifier: return L"Justifier";
         case PadKind::menacer: return L"Menacer";
         case PadKind::miracle_piano: return L"Miracle Piano";
+        case PadKind::sms_light_phaser: return L"Light Phaser (SMS)";
+        case PadKind::sms_paddle: return L"Paddle (SMS)";
     }
     return L"";
+}
+
+// A row's label. The Master System devices call their rows after what they
+// do on that device rather than after the pad button underneath.
+const wchar_t* pad_row_name(PadKind kind, PadButton button) {
+    if (kind == PadKind::sms_light_phaser && button == PadButton::a) {
+        return L"Trigger";
+    }
+    if (kind == PadKind::sms_paddle) {
+        if (button == PadButton::left) return L"Turn left";
+        if (button == PadButton::right) return L"Turn right";
+        if (button == PadButton::a) return L"Button";
+    }
+    return pad_button_name(button);
 }
 
 // Title bar and menus follow the app's own theme rather than the system's.
@@ -6144,6 +6182,9 @@ struct ConfigDraft {
     std::filesystem::path bios_folder_32x{};
     std::filesystem::path bios_folder_segacd{};
     std::array<PlayerInput, 2> players{};
+    // The Master System's port 1 (Emulation > Master System controller), which
+    // player 1's dropdown also chooses - see PadKind::sms_light_phaser.
+    SmsDeviceChoice sms_port1 = SmsDeviceChoice::automatic;
     // Which profile each player's dropdown names. Kept here with the bindings
     // so Cancel throws it away with them.
     std::array<std::wstring, 2> profile_names{};
@@ -6894,6 +6935,16 @@ constexpr PadSpot kSixButtonSpots[] = {
     {PadButton::b, 0.775, 0.500},    {PadButton::c, 0.873, 0.451},
 };
 
+// Fractions of res/pad_phaser.png and res/pad_paddle.png: the trigger, and the
+// paddle's knob (both turn rows) and button.
+constexpr PadSpot kPhaserSpots[] = {
+    {PadButton::a, 0.474, 0.430},
+};
+constexpr PadSpot kPaddleSpots[] = {
+    {PadButton::left, 0.200, 0.480}, {PadButton::right, 0.305, 0.480},
+    {PadButton::a, 0.678, 0.505},
+};
+
 bool pad_spot(PadKind kind, PadButton button, double& x, double& y) {
     const PadSpot* spots = nullptr;
     std::size_t count = 0;
@@ -6903,6 +6954,12 @@ bool pad_spot(PadKind kind, PadButton button, double& x, double& y) {
     } else if (kind == PadKind::six_button) {
         spots = kSixButtonSpots;
         count = std::size(kSixButtonSpots);
+    } else if (kind == PadKind::sms_light_phaser) {
+        spots = kPhaserSpots;
+        count = std::size(kPhaserSpots);
+    } else if (kind == PadKind::sms_paddle) {
+        spots = kPaddleSpots;
+        count = std::size(kPaddleSpots);
     }
     for (std::size_t i = 0; i < count; ++i) {
         if (spots[i].button == button) {
@@ -7488,6 +7545,16 @@ void fill_profile_combo(HWND page, const std::wstring& select, int select_player
     }
 }
 
+// What a player's panel shows: their own controller, or for player 1 the
+// Master System device chosen for port 1.
+PadKind shown_kind(const ConfigDraft& draft, int player) {
+    if (player == 0) {
+        if (draft.sms_port1 == SmsDeviceChoice::light_phaser) return PadKind::sms_light_phaser;
+        if (draft.sms_port1 == SmsDeviceChoice::paddle) return PadKind::sms_paddle;
+    }
+    return draft.players[player].kind;
+}
+
 // A light gun is a mouse and nothing else, so the device dropdown is forced to
 // Mouse and disabled rather than offering three devices that could never aim
 // one. Switching back to a pad puts the choice back to the keyboard.
@@ -7496,19 +7563,24 @@ void sync_player_controls(HWND page, ConfigDraft& draft, int player) {
     const int device_id = player == 0 ? IDC_IN_P1_DEVICE : IDC_IN_P2_DEVICE;
     const int pic_id = player == 0 ? IDC_IN_P1_PIC : IDC_IN_P2_PIC;
     auto& input = draft.players[player];
-    const bool gun = kind_is_light_gun(input.kind);
+    const PadKind shown = shown_kind(draft, player);
+    // A Master System device's trigger or button is an ordinary binding on
+    // the player's own keyboard or pad, so the device dropdown stays live;
+    // only the Mega Drive guns and the piano take it over.
+    const bool sms = kind_is_sms_device(shown);
+    const bool gun = !sms && kind_is_light_gun(input.kind);
     // The keyboard is played in its own window with a pointer or a
     // fingertip, so none of the four devices describes it. Left as Keyboard
     // it reads as though it were being typed on, which is not what happens
     // and not something anyone could bind. Forced to Mouse and greyed out,
     // the same way a light gun is, because that is the truth about both.
-    const bool piano = input.kind == PadKind::miracle_piano;
+    const bool piano = !sms && input.kind == PadKind::miracle_piano;
     if (gun || piano) {
         input.device = InputDevice::mouse;
     } else if (input.device == InputDevice::mouse) {
         input.device = InputDevice::keyboard;
     }
-    SendDlgItemMessageW(page, kind_id, CB_SETCURSEL, static_cast<WPARAM>(input.kind), 0);
+    SendDlgItemMessageW(page, kind_id, CB_SETCURSEL, static_cast<WPARAM>(shown), 0);
     SendDlgItemMessageW(page, device_id, CB_SETCURSEL, static_cast<WPARAM>(input.device), 0);
     EnableWindow(GetDlgItem(page, device_id), (gun || piano) ? FALSE : TRUE);
     InvalidateRect(GetDlgItem(page, pic_id), nullptr, TRUE);
@@ -7527,7 +7599,7 @@ int pad_pic_hit(HWND control, const ConfigDraft& draft, POINT at) {
     RECT client{};
     GetClientRect(control, &client);
     const int player = pad_pic_player(control);
-    const auto kind = draft.players[player].kind;
+    const auto kind = shown_kind(draft, player);
     const auto& art = pad_art(draft.state->instance, kind);
     const auto layout = input_layout(client, kind, art);
     for (int index = 0; index < kPadButtonCount; ++index) {
@@ -7660,7 +7732,8 @@ LRESULT CALLBACK pad_pic_proc(HWND control, UINT message, WPARAM wparam, LPARAM 
 void draw_pad_picture(const ConfigDraft& draft, DRAWITEMSTRUCT* item) {
     const int player = item->CtlID == IDC_IN_P2_PIC ? 1 : 0;
     const auto& input = draft.players[player];
-    const auto& art = pad_art(draft.state->instance, input.kind);
+    const PadKind shown = shown_kind(draft, player);
+    const auto& art = pad_art(draft.state->instance, shown);
     const Theme& theme = theme_of(*draft.state);
     const bool dark = draft.state->dark_theme;
     RECT client = item->rcItem;
@@ -7684,7 +7757,7 @@ void draw_pad_picture(const ConfigDraft& draft, DRAWITEMSTRUCT* item) {
     FillRect(dc, &client, background);
     DeleteObject(background);
 
-    const auto layout = input_layout(client, input.kind, art);
+    const auto layout = input_layout(client, shown, art);
 
     if (art.bitmap != nullptr) {
         HDC memory = CreateCompatibleDC(dc);
@@ -7722,7 +7795,7 @@ void draw_pad_picture(const ConfigDraft& draft, DRAWITEMSTRUCT* item) {
         SelectObject(dc, old_outline);
         DeleteObject(outline);
         SetTextColor(dc, dim_text);
-        DrawTextW(dc, pad_kind_name(input.kind), -1, &frame,
+        DrawTextW(dc, pad_kind_name(shown), -1, &frame,
                   DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
 
@@ -7742,8 +7815,32 @@ void draw_pad_picture(const ConfigDraft& draft, DRAWITEMSTRUCT* item) {
         DrawTextW(dc, text.c_str(), -1, &status, DT_CENTER | DT_SINGLELINE);
     }
 
+    // The Master System devices: what the mouse does, and that this is port 1
+    // of a Master System only - the Mega Drive keeps player 1's own pad.
+    if (kind_is_sms_device(shown)) {
+        RECT note = client;
+        note.left = client.right -
+                    (std::min)(kInputColumnWidth, static_cast<int>(client.right - client.left) / 2);
+        note.top = client.top;
+        for (int index = 0; index < kPadButtonCount; ++index) {
+            if (layout.row_used[index] && layout.rows[index].bottom + 4 > note.top) {
+                note.top = layout.rows[index].bottom + 4;
+            }
+        }
+        SetTextColor(dc, dim_text);
+        DrawTextW(dc,
+                  shown == PadKind::sms_light_phaser
+                      ? L"Master System games: aim with the mouse; the left button fires "
+                        L"too. Mega Drive games keep player 1's pad. Pick a pad above to "
+                        L"go back to Automatic."
+                      : L"Master System games: the knob follows the mouse; the left button "
+                        L"presses too. Mega Drive games keep player 1's pad. Pick a pad "
+                        L"above to go back to Automatic.",
+                  -1, &note, DT_LEFT | DT_WORDBREAK);
+    }
+
     // The aim is the mouse and is not up for negotiation, but the buttons are.
-    if (kind_is_light_gun(input.kind)) {
+    if (!kind_is_sms_device(shown) && kind_is_light_gun(input.kind)) {
         RECT note = client;
         note.left = client.right -
                     (std::min)(kInputColumnWidth, static_cast<int>(client.right - client.left) / 2);
@@ -7793,7 +7890,7 @@ void draw_pad_picture(const ConfigDraft& draft, DRAWITEMSTRUCT* item) {
         text.left += 6;
         text.right -= 6;
         SetTextColor(dc, theme.text);
-        DrawTextW(dc, pad_button_name(button), -1, &text,
+        DrawTextW(dc, pad_row_name(shown, button), -1, &text,
                   DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         const bool on_pad = device_is_gamepad(input.device);
         const bool on_di = input.device == InputDevice::dinput;
@@ -7811,7 +7908,7 @@ void draw_pad_picture(const ConfigDraft& draft, DRAWITEMSTRUCT* item) {
         // the outline stand-in: the spots are places on the picture.
         double fx = 0.0;
         double fy = 0.0;
-        if (live && art.bitmap != nullptr && pad_spot(input.kind, button, fx, fy)) {
+        if (live && art.bitmap != nullptr && pad_spot(shown, button, fx, fy)) {
             const int spot_x =
                 layout.art.left + static_cast<int>((layout.art.right - layout.art.left) * fx);
             const int spot_y =
@@ -7853,6 +7950,12 @@ INT_PTR CALLBACK input_page_proc(HWND page, UINT message, WPARAM wparam, LPARAM 
                     SendDlgItemMessageW(page, id, CB_ADDSTRING, 0,
                                         reinterpret_cast<LPARAM>(pad_kind_name(kind)));
                 }
+            }
+            // The Master System's devices go in port 1, so only player 1 offers
+            // them - after the rest, still in PadKind order.
+            for (const auto kind : {PadKind::sms_light_phaser, PadKind::sms_paddle}) {
+                SendDlgItemMessageW(page, IDC_IN_P1_KIND, CB_ADDSTRING, 0,
+                                    reinterpret_cast<LPARAM>(pad_kind_name(kind)));
             }
             for (const int id : {IDC_IN_P1_DEVICE, IDC_IN_P2_DEVICE}) {
                 for (const auto* name : devices) {
@@ -8028,7 +8131,20 @@ INT_PTR CALLBACK input_page_proc(HWND page, UINT message, WPARAM wparam, LPARAM 
                 const int player = control == IDC_IN_P2_KIND ? 1 : 0;
                 const auto chosen = SendDlgItemMessageW(page, control, CB_GETCURSEL, 0, 0);
                 if (chosen != CB_ERR) {
-                    draft->players[player].kind = static_cast<PadKind>(chosen);
+                    const auto kind = static_cast<PadKind>(chosen);
+                    if (kind == PadKind::sms_light_phaser) {
+                        draft->sms_port1 = SmsDeviceChoice::light_phaser;
+                    } else if (kind == PadKind::sms_paddle) {
+                        draft->sms_port1 = SmsDeviceChoice::paddle;
+                    } else {
+                        draft->players[player].kind = kind;
+                        // A pad picked for player 1 takes the Master System
+                        // back to choosing by game - unless the pad was forced
+                        // from the Emulation menu, which a pad here agrees with.
+                        if (player == 0 && draft->sms_port1 != SmsDeviceChoice::control_pad) {
+                            draft->sms_port1 = SmsDeviceChoice::automatic;
+                        }
+                    }
                     sync_player_controls(page, *draft, player);
                 }
                 return TRUE;
@@ -8261,6 +8377,8 @@ INT_PTR CALLBACK configure_proc(HWND dialog, UINT message, WPARAM wparam, LPARAM
                         }
                     }
                     state.players = draft->players;
+                    state.sms_port1 = draft->sms_port1;
+                    update_sms_port1(state);
                     state.profile_names = draft->profile_names;
                     state.hotkeys = draft->hotkeys;
                     // Whatever the players were, they may not be that now, and
@@ -8272,6 +8390,9 @@ INT_PTR CALLBACK configure_proc(HWND dialog, UINT message, WPARAM wparam, LPARAM
                     }
                     save_settings(state);
                     refresh_menu_hotkeys(state);
+                    // The Master System controller is also an Emulation menu
+                    // item; its tick has to follow a change made here.
+                    sync_menu_state(state);
                     // Any binding that was down when the dialog opened is not
                     // down any more as far as the user is concerned.
                     clear_all_buttons(state);
@@ -8739,6 +8860,7 @@ void show_configure(RuntimeState& state) {
     draft.bios_folder_32x = state.bios_folder_32x;
     draft.bios_folder_segacd = state.bios_folder_segacd;
     draft.players = state.players;
+    draft.sms_port1 = state.sms_port1;
     draft.profile_names = state.profile_names;
     draft.hotkeys = state.hotkeys;
     DialogBoxParamW(state.instance, MAKEINTRESOURCEW(IDD_CONFIGURE), state.window, configure_proc,

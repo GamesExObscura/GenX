@@ -60,6 +60,12 @@ IDR_PAD_MENACER   RCDATA "../res/pad_menacer.png"
 #ifdef GENX_HAVE_PAD_PIANO_PNG
 IDR_PAD_PIANO     RCDATA "../res/pad_piano.png"
 #endif
+#ifdef GENX_HAVE_PAD_PHASER_PNG
+IDR_PAD_PHASER    RCDATA "../res/pad_phaser.png"
+#endif
+#ifdef GENX_HAVE_PAD_PADDLE_PNG
+IDR_PAD_PADDLE    RCDATA "../res/pad_paddle.png"
+#endif
 
 // The frame. It owns nothing but the tab strip and the two buttons; every
 // setting lives on one of the three pages below.

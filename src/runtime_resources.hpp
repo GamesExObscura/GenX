@@ -21,6 +21,8 @@
 #define IDR_PAD_JUSTIFIER 212
 #define IDR_PAD_MENACER 213
 #define IDR_PAD_PIANO 214
+#define IDR_PAD_PHASER 215
+#define IDR_PAD_PADDLE 216
 
 // Open ROM is a submenu, one entry per system, each starting in that system's
 // own games folder. IDM_FILE_OPEN stays the Mega Drive entry so the existing

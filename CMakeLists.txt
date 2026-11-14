@@ -137,7 +137,7 @@ target_compile_definitions(genx PRIVATE GENX_VERSION="${GENX_VERSION}"
 # defines GENX_HAVE_<NAME>_PNG for the resource script, so dropping a file into
 # res/ and re-running CMake is all it takes to put it back.
 foreach(art IN ITEMS pad_3button.png pad_6button.png pad_justifier.png pad_menacer.png
-                     pad_piano.png)
+                     pad_piano.png pad_phaser.png pad_paddle.png)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/res/${art}")
         string(TOUPPER "GENX_HAVE_${art}" art_define)
         string(REPLACE "." "_" art_define "${art_define}")

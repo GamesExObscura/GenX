@@ -63,6 +63,10 @@ public:
     [[nodiscard]] bool thirtytwox_plugged() const noexcept { return thirtytwox_plugged_; }
     // A disc that looked for a 32X while none was plugged in. Cleared by a load.
     [[nodiscard]] bool cd_looked_for_32x() const noexcept { return cd_looked_for_32x_; }
+    // Diagnostic: how often the 68000 has put the Z80 into reset (a release
+    // followed by an assert counts once), and the frame of the last time.
+    [[nodiscard]] std::uint64_t z80_reset_asserts() const noexcept { return z80_reset_asserts_; }
+    [[nodiscard]] std::uint32_t z80_reset_last_frame() const noexcept { return z80_reset_last_frame_; }
     [[nodiscard]] mercury::segacd::SegaCd& segacd() noexcept { return *segacd_; }
     [[nodiscard]] const mercury::segacd::SegaCd& segacd() const noexcept { return *segacd_; }
     void reset() noexcept;
@@ -436,6 +440,9 @@ private:
     // window - see ControllerPort::kThReleaseLatency), so it is not reset or
     // saved: it only has to keep going up.
     std::uint64_t io_clock_ = 0;
+    std::uint64_t z80_reset_asserts_ = 0;
+    std::uint32_t z80_reset_last_frame_ = 0;
+    void note_z80_reset_asserted() noexcept;
     // 68000 cycles run since the SH-2s last caught up, and the SH-2 cycles
     // still owed to them after the last slice overshot or fell short.
     std::uint32_t thirtytwox_quantum_ = 0;

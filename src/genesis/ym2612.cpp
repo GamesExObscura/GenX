@@ -108,6 +108,19 @@ std::int32_t clamp16(std::int32_t value) noexcept {
 }  // namespace
 
 void Ym2612::reset() noexcept {
+    reset_chip();
+    cycle_accumulator_ = 0.0;
+    samples_.clear();
+    sample_count_ = 0;
+    write_count_ = 0;
+}
+
+// What the chip's /IC pin clears - every register, channel, envelope, timer,
+// the LFO and the DAC - and nothing of the emulator's own bookkeeping: the
+// samples already made this frame, the sample clock and the counters stay.
+// On a Mega Drive /IC is wired to the Z80's reset line, so this runs mid-game
+// whenever the 68000 puts the Z80 into reset (Genesis::note_z80_reset_asserted).
+void Ym2612::reset_chip() noexcept {
     channels_ = {};
     latched_address_.fill(0);
     for (auto& bank : register_file_) {
@@ -137,12 +150,8 @@ void Ym2612::reset() noexcept {
     lfo_step_ = 0;
     dac_enabled_ = false;
     dac_value_ = 0;
-    cycle_accumulator_ = 0.0;
     envelope_divider_ = 0;
     envelope_counter_ = 0;
-    samples_.clear();
-    sample_count_ = 0;
-    write_count_ = 0;
 }
 
 void Ym2612::sanitize_loaded() noexcept {

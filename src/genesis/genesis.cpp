@@ -336,6 +336,30 @@ Genesis::LoadResult Genesis::load_cd(const std::filesystem::path& disc,
     return result;
 }
 
+// THE YM2612'S RESET PIN IS THE Z80'S. On a Mega Drive the chip's /IC is
+// wired to the Z80 reset line, so the 68000 putting the Z80 into reset
+// silences the FM as well: every register, envelope and the DAC back to
+// power-on. Fantastic Dizzy (issue #20) depends on it. Opening the inventory,
+// its Z80 driver re-initialises the chip - keys every channel off, then sets
+// full volume and release rate 0 - and a few frames later the 68000 resets
+// the Z80. Without the chip reset the note that was playing went on at full
+// volume with the slowest release there is: a buzz for as long as the menu
+// was open, where Kega Fusion goes silent. Genesis Plus GX resets the chip at
+// the same moment.
+void Genesis::note_z80_reset_asserted() noexcept {
+    ++z80_reset_asserts_;
+    z80_reset_last_frame_ = vdp_.frames_elapsed();
+    // MERCURY_NO_YM_ON_Z80_RESET=1 leaves the chip alone, for an A/B on the
+    // same build.
+    static const bool keep_chip = [] {
+        const char* e = std::getenv("MERCURY_NO_YM_ON_Z80_RESET");
+        return e != nullptr && e[0] != '0';
+    }();
+    if (!keep_chip) {
+        ym2612_.reset_chip();
+    }
+}
+
 void Genesis::set_cd_32x(bool wanted) noexcept {
     cd_32x_wanted_ = wanted;
     if (cd_mode_) {
@@ -803,6 +827,9 @@ void Genesis::write16(std::uint32_t address, std::uint16_t value) noexcept {
             z80_.reset();
             z80_.set_stack_pointer(0x0000);
         }
+        if (!released && !z80_reset_asserted_) {
+            note_z80_reset_asserted();
+        }
         z80_reset_asserted_ = !released;
         return;
     }
@@ -980,6 +1007,9 @@ void Genesis::write8(std::uint32_t address, std::uint8_t value) noexcept {
         if (released && z80_reset_asserted_) {
             z80_.reset();
             z80_.set_stack_pointer(0x0000);
+        }
+        if (!released && !z80_reset_asserted_) {
+            note_z80_reset_asserted();
         }
         z80_reset_asserted_ = !released;
         return;

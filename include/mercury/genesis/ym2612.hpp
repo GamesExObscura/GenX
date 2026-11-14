@@ -24,6 +24,10 @@ public:
     static constexpr std::size_t kOperatorCount = 4;
 
     void reset() noexcept;
+    // The chip's own reset (its /IC pin): registers, channels, envelopes,
+    // timers, LFO and DAC back to power-on, leaving the samples already made
+    // and the sample clock alone. reset() is this plus that bookkeeping.
+    void reset_chip() noexcept;
 
     // Address/data pairs. Port 0 covers channels 1-3, port 1 channels 4-6.
     void write(std::uint8_t port, std::uint8_t value) noexcept;

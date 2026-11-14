@@ -3071,6 +3071,19 @@ int main(int argc, char** argv) {
         machine.port2().set_kind(mercury::genesis::ControllerPort::Kind::none);
         std::printf("port 2: empty\n");
     }
+    // MERCURY_FORCE_NTSC=1 / MERCURY_FORCE_PAL=1: run the cartridge on the
+    // other kind of console than its header picks - a "(USA, Europe)" cart
+    // whose header says only E runs at 50Hz here, and at 60Hz on a US
+    // machine. Power-cycled after, so the game starts on the new timing.
+    if (const char* e = std::getenv("MERCURY_FORCE_NTSC"); e != nullptr && *e == '1') {
+        machine.set_pal(false);
+        machine.reset();
+        std::printf("forced NTSC (60Hz)\n");
+    } else if (const char* p = std::getenv("MERCURY_FORCE_PAL"); p != nullptr && *p == '1') {
+        machine.set_pal(true);
+        machine.reset();
+        std::printf("forced PAL (50Hz)\n");
+    }
     // Same MERCURY_INPUT_SCRIPT as the summary mode: this is the loop that dumps
     // frames, so it is the one that has to be able to walk a menu.
     std::vector<std::pair<int, std::string>> dump_script;
@@ -3207,6 +3220,16 @@ int main(int argc, char** argv) {
                 }
             }
         }
+        // MERCURY_FM_LOG=<path> with MERCURY_FM_LOG_FROM=<frame>: every YM2612
+        // register write from that frame on, written out after the run with
+        // the chip sample and the frame it landed in.
+        static const int fm_log_from = [] {
+            const char* e = std::getenv("MERCURY_FM_LOG_FROM");
+            return e == nullptr ? -1 : std::atoi(e);
+        }();
+        if (frame == fm_log_from && std::getenv("MERCURY_FM_LOG") != nullptr) {
+            machine.ym2612().set_write_logging(true);
+        }
         const auto cycles = machine.run_frame();
         // MERCURY_CTRL_WATCH names a control-port word; these are the addresses
         // that wrote it. A register whose value alternates was written by code
@@ -3278,6 +3301,8 @@ int main(int argc, char** argv) {
             .write(reinterpret_cast<const char*>(wram.data()), static_cast<std::streamsize>(wram.size()));
         std::printf("VDP memory and work RAM written to %s\n", dir);
     }
+    std::printf("Z80 reset asserted by the 68000: %llu times, last on frame %u\n",
+                static_cast<unsigned long long>(machine.z80_reset_asserts()), machine.z80_reset_last_frame());
     // Which V counter values the game read, and from where. A raster effect
     // timed by polling the counter instead of a line interrupt lands wherever
     // the counter says it should - so the values seen are the evidence.
@@ -3304,6 +3329,51 @@ int main(int argc, char** argv) {
     // answer does not have to be guessed at.
     const auto& fm = machine.ym2612().sample_buffer();
     const auto& psg = machine.psg().sample_buffer();
+    if (const char* path = std::getenv("MERCURY_FM_LOG"); path != nullptr && machine.ym2612().write_logging()) {
+        if (std::FILE* f = std::fopen(path, "w")) {
+            for (const auto& e : machine.ym2612().write_log()) {
+                std::fprintf(f, "%.4f %u:%02X=%02X\n",
+                             static_cast<double>(e.sample) / mercury::genesis::Ym2612::kSampleRateHz,
+                             e.bank, e.address, e.value);
+            }
+            std::fclose(f);
+            std::printf("FM log: %zu writes to %s\n", machine.ym2612().write_log().size(), path);
+        }
+    }
+    // MERCURY_WAV=<path>: the whole run's audio, each chip on its own -
+    // <path>-fm.wav (stereo, the YM2612's own rate) and <path>-psg.wav (mono,
+    // the PSG's). "That sound is wrong" is first a question of which chip made
+    // it, and two separate tracks answer it without a listening test.
+    if (const char* wav = std::getenv("MERCURY_WAV"); wav != nullptr && *wav != '\0') {
+        const auto write = [](const std::string& path, const auto& samples, std::uint16_t channels,
+                              std::uint32_t rate) {
+            std::ofstream out(path, std::ios::binary | std::ios::trunc);
+            const std::uint32_t bytes = static_cast<std::uint32_t>(samples.size() * 2);
+            const auto put32 = [&out](std::uint32_t v) { out.write(reinterpret_cast<const char*>(&v), 4); };
+            const auto put16 = [&out](std::uint16_t v) { out.write(reinterpret_cast<const char*>(&v), 2); };
+            out.write("RIFF", 4);
+            put32(36 + bytes);
+            out.write("WAVEfmt ", 8);
+            put32(16);
+            put16(1);
+            put16(channels);
+            put32(rate);
+            put32(rate * channels * 2);
+            put16(static_cast<std::uint16_t>(channels * 2));
+            put16(16);
+            out.write("data", 4);
+            put32(bytes);
+            for (const auto s : samples) {
+                put16(static_cast<std::uint16_t>(static_cast<std::int16_t>(
+                    std::clamp(static_cast<int>(s), -32768, 32767))));
+            }
+            std::printf("wrote %s (%zu samples, %u Hz, %u ch)\n", path.c_str(), samples.size(), rate,
+                        channels);
+        };
+        write(std::string(wav) + "-fm.wav", fm, 2,
+              static_cast<std::uint32_t>(std::lround(mercury::genesis::Ym2612::kSampleRateHz)));
+        write(std::string(wav) + "-psg.wav", psg, 1, mercury::gamegear::Psg::kDefaultSampleRate);
+    }
     std::int32_t fm_peak = 0;
     for (auto sample : fm) fm_peak = std::max<std::int32_t>(fm_peak, std::abs(static_cast<int>(sample)));
     std::int32_t psg_peak = 0;

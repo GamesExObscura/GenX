@@ -11,10 +11,12 @@
 // any particular ROM happens to use SSG-EG in its first few seconds is not
 // something a regression test should depend on.
 
+#include "mercury/genesis/genesis.hpp"
 #include "mercury/genesis/ym2612.hpp"
 
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <vector>
 
 namespace {
@@ -169,6 +171,31 @@ int main() {
     std::snprintf(detail, sizeof(detail), "first %.0f vs second %.0f", first_half, second_half);
     check("it FADES while held rather than sitting at a constant level",
           second_half < first_half * 0.7, detail);
+
+    // THE YM2612'S RESET PIN IS THE Z80'S. Fantastic Dizzy (issue #20) leaves
+    // a note at full volume with release rate 0 and then has the 68000 reset
+    // the Z80 - which on a console resets the FM chip as well and silences it.
+    // Without that the note buzzed for as long as the inventory was open.
+    {
+        auto machine = std::make_unique<mercury::genesis::Genesis>();
+        auto& ym = machine->ym2612();
+        set_up_channel(ym, 0x00);
+        for (std::uint8_t slot = 0; slot < 4; ++slot) {
+            write_reg(ym, static_cast<std::uint8_t>(0x80 + slot * 4), 0x00);  // SL 0, RR 0
+        }
+        write_reg(ym, 0x2B, 0x80);  // the DAC on, as Dizzy's driver leaves it
+        const double before = energy(ym, 100'000);
+        check("the note sounds before the Z80 is reset", before > 0.0);
+        machine->write16(0xA11200, 0x0100);  // Z80 out of reset...
+        const double running = energy(ym, 100'000);
+        check("releasing the Z80 from reset leaves the chip alone", running > 0.0);
+        machine->write16(0xA11200, 0x0000);  // ...and back into it
+        const double after = energy(ym, 100'000);
+        std::snprintf(detail, sizeof(detail), "energy after the reset %.0f", after);
+        check("putting the Z80 into reset silences the YM2612", after == 0.0, detail);
+        check("and switches the DAC off with it", ym.describe().find("dac       : off") != std::string::npos,
+              ym.describe().c_str());
+    }
 
     if (failures != 0) {
         std::printf("\n%d check(s) failed\n", failures);

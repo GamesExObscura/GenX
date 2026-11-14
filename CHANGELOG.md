@@ -17,6 +17,12 @@
   controller's select line, before the line has risen on real hardware. GenX
   treated the line as risen at once, and now waits for it the way a real
   controller does.
+- **Fantastic Dizzy: no more buzzing in the inventory menu** (issue #20). On
+  a real console, the FM sound chip is reset whenever the game resets the
+  sound processor. Dizzy does that when the menu opens, which silences the
+  music. GenX didn't reset the chip, so a note was left hanging at full volume.
+  Other games that reset the sound processor between scenes now cut off their
+  old notes at that point too, as on a console.
 - **OutRunners: no more white dots in the sky** (issue #23). Every line, the
   game sends the next sky colour to the video chip. On the line after its
   colour list ends, it sends a "read" command and then writes anyway. Real

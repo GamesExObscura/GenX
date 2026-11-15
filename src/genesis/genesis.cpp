@@ -17,6 +17,8 @@ constexpr std::uint32_t kIoBase = 0xA10000;
 constexpr std::uint32_t kIoEnd = 0xA1001F;
 constexpr std::uint32_t kZ80BusReq = 0xA11100;
 constexpr std::uint32_t kZ80Reset = 0xA11200;
+// MERCURY_LOG_Z80_RESET diagnostics, defined with the Z80 address space below.
+void log_z80_reset_edge(bool asserted, std::uint64_t clock, std::uint32_t frame, std::uint32_t pc);
 constexpr std::uint32_t kVdpBase = 0xC00000;
 constexpr std::uint32_t kVdpEnd = 0xC0001F;
 constexpr std::uint32_t kWorkRamBase = 0xE00000;
@@ -855,9 +857,11 @@ void Genesis::write16(std::uint32_t address, std::uint16_t value) noexcept {
         if (released && z80_reset_asserted_) {
             z80_.reset();
             z80_.set_stack_pointer(0x0000);
+            log_z80_reset_edge(false, io_clock_, vdp_.frames_elapsed(), m68k_.registers().pc);
         }
         if (!released && !z80_reset_asserted_) {
             note_z80_reset_asserted();
+            log_z80_reset_edge(true, io_clock_, vdp_.frames_elapsed(), m68k_.registers().pc);
         }
         z80_reset_asserted_ = !released;
         return;
@@ -1062,9 +1066,11 @@ void Genesis::write8(std::uint32_t address, std::uint8_t value) noexcept {
         if (released && z80_reset_asserted_) {
             z80_.reset();
             z80_.set_stack_pointer(0x0000);
+            log_z80_reset_edge(false, io_clock_, vdp_.frames_elapsed(), m68k_.registers().pc);
         }
         if (!released && !z80_reset_asserted_) {
             note_z80_reset_asserted();
+            log_z80_reset_edge(true, io_clock_, vdp_.frames_elapsed(), m68k_.registers().pc);
         }
         z80_reset_asserted_ = !released;
         return;
@@ -1181,6 +1187,31 @@ void Genesis::write_io(std::uint32_t address, std::uint8_t value) noexcept {
 // --- Z80 address space -----------------------------------------------------
 
 namespace {
+// Diagnostics only (MERCURY_LOG_Z80_RESET=1): how long the 68000 holds the Z80
+// in reset, to stderr. The YM2612's /IC is on the same line and its data sheet
+// asks for at least 192 of its clocks (about 190 68000 cycles) low, so a pulse
+// much shorter than that may not clear the chip on a console.
+void log_z80_reset_edge(bool asserted, std::uint64_t clock, std::uint32_t frame, std::uint32_t pc) {
+    static const bool log = [] {
+        const char* e = std::getenv("MERCURY_LOG_Z80_RESET");
+        return e != nullptr && e[0] != '0';
+    }();
+    if (!log) {
+        return;
+    }
+    static std::uint64_t asserted_at = 0;
+    static std::uint32_t asserted_frame = 0;
+    static std::uint32_t asserted_pc = 0;
+    if (asserted) {
+        asserted_at = clock;
+        asserted_frame = frame;
+        asserted_pc = pc;
+        return;
+    }
+    std::fprintf(stderr, "z80 reset frame %u pc=%06X held %llu 68k cycles (released frame %u pc=%06X)\n",
+                 asserted_frame, asserted_pc, static_cast<unsigned long long>(clock - asserted_at), frame, pc);
+}
+
 struct Z80ControlWrite {
     std::uint32_t address = 0;
     std::uint16_t value = 0;

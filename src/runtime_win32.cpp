@@ -344,6 +344,11 @@ struct PlayerInput {
     std::array<PadInput, kPadButtonCount> dpad{};
     // Which device slot this player reads, 0-3, in whichever model is selected.
     int pad_slot = 0;
+    // "Automatic" in the device dropdown (issue #6): GenX picks the device
+    // itself - a connected XInput pad, else a DirectInput pad, else the
+    // keyboard - and `device`/`pad_slot` above say what it picked. See
+    // resolve_automatic_device.
+    bool automatic = false;
 };
 
 bool device_is_gamepad(InputDevice device) {
@@ -788,6 +793,9 @@ struct RuntimeState {
     // Following a pad that moves. See find_moved_pad.
     std::array<std::wstring, 2> dinput_pad_name{};
     std::array<int, 2> pad_search_countdown{};
+    // Frames until an Automatic player on the keyboard looks for a pad again
+    // (twice a second, like pad_search_countdown).
+    std::array<int, 2> auto_search_countdown{};
     std::array<Hotkey, kHkCount> hotkeys{};
     // 0-100, applied on top of the per-machine gain.
     int volume = 100;
@@ -991,10 +999,67 @@ PadInput read_gamepad(int slot, bool& connected) {
 // gear. Devices are enumerated once and then polled by slot, the same shape as
 // the XInput side, so the rest of the runtime does not care which model a
 // player is on.
+// PLAYSTATION CONTROLLERS (issue #6). A DualShock 4 or DualSense on Windows is
+// not an XInput device; it arrives through DirectInput as "Wireless
+// Controller", with its buttons numbered in Sony's order. Recognised by USB
+// vendor and product ID, it gets its own button names in the Input tab and a
+// Mega Drive layout that matches the Xbox one (see set_model_dinput_bindings).
+// A DualShock 3 has no Windows driver of its own; DsHidMini in its native
+// (SDF) mode presents it with the d-pad as four buttons and no hat, in the
+// PS3's own order, and that is the shape recognised here. Through a driver
+// that turns it into an Xbox pad it is simply an XInput controller.
+enum class DiModel { generic, dualshock4, dualsense, dualshock3 };
+
+DiModel detect_dinput_model(const DIDEVICEINSTANCEW& instance, IDirectInputDevice8W* device) {
+    // For a HID device DirectInput's product GUID carries the USB IDs in its
+    // first field: vendor in the low word, product in the high word.
+    const DWORD ids = instance.guidProduct.Data1;
+    if (LOWORD(ids) != 0x054C) {  // Sony
+        return DiModel::generic;
+    }
+    switch (HIWORD(ids)) {
+        case 0x05C4:  // DualShock 4
+        case 0x09CC:  // DualShock 4, second revision
+        case 0x0BA0:  // DualShock 4 USB wireless adapter
+            return DiModel::dualshock4;
+        case 0x0CE6:  // DualSense
+        case 0x0DF2:  // DualSense Edge
+            return DiModel::dualsense;
+        case 0x0268: {  // DualShock 3 / Sixaxis
+            DIDEVCAPS caps{};
+            caps.dwSize = sizeof(caps);
+            if (device != nullptr && SUCCEEDED(device->GetCapabilities(&caps)) && caps.dwPOVs == 0 &&
+                caps.dwButtons >= 17) {
+                return DiModel::dualshock3;
+            }
+            // Through a driver that gives it a hat its buttons are numbered
+            // the driver's way; leave that to the generic layout.
+            return DiModel::generic;
+        }
+        default:
+            return DiModel::generic;
+    }
+}
+
+const wchar_t* dinput_model_name(DiModel model) {
+    switch (model) {
+        case DiModel::dualshock4: return L"DualShock 4";
+        case DiModel::dualsense: return L"DualSense";
+        case DiModel::dualshock3: return L"DualShock 3";
+        default: return nullptr;
+    }
+}
+
 struct DirectInputDevices {
     IDirectInput8W* api = nullptr;
     std::array<IDirectInputDevice8W*, 4> device{};
     std::array<std::wstring, 4> name{};
+    // Which controller each slot holds, where it is one GenX knows by layout.
+    std::array<DiModel, 4> model{};
+    // An XInput pad listed a second time: Windows shows every XInput
+    // controller to DirectInput as well. Automatic skips these, so one pad
+    // is never taken twice (dinput_is_xinput_twin).
+    std::array<bool, 4> xinput_twin{};
     int count = 0;
     bool tried = false;
     // Kept so a rescan can rebuild the device list without the caller having
@@ -1018,6 +1083,56 @@ struct DirectInputDevices {
 DirectInputDevices& dinput_devices() {
     static DirectInputDevices instance;
     return instance;
+}
+
+// Whether a DirectInput device is an XInput pad seen a second time. Microsoft's
+// documented test is "IG_" in the device's HID path; the paths are read here
+// through Raw Input rather than WMI, and matched to the DirectInput device by
+// its USB vendor and product IDs. Both path spellings are handled: VID_045E
+// (USB) and VID&0002045E (Bluetooth).
+bool dinput_is_xinput_twin(const DIDEVICEINSTANCEW& instance) {
+    const DWORD ids = instance.guidProduct.Data1;
+    wchar_t vid_hex[8];
+    wchar_t pid_hex[8];
+    swprintf(vid_hex, 8, L"%04X", static_cast<unsigned>(LOWORD(ids)));
+    swprintf(pid_hex, 8, L"%04X", static_cast<unsigned>(HIWORD(ids)));
+    UINT count = 0;
+    if (GetRawInputDeviceList(nullptr, &count, sizeof(RAWINPUTDEVICELIST)) != 0 || count == 0) {
+        return false;
+    }
+    std::vector<RAWINPUTDEVICELIST> list(count);
+    const UINT got = GetRawInputDeviceList(list.data(), &count, sizeof(RAWINPUTDEVICELIST));
+    if (got == static_cast<UINT>(-1)) {
+        return false;
+    }
+    for (UINT i = 0; i < got; ++i) {
+        if (list[i].dwType != RIM_TYPEHID) {
+            continue;
+        }
+        wchar_t raw[512] = L"";
+        UINT size = static_cast<UINT>(std::size(raw));
+        if (GetRawInputDeviceInfoW(list[i].hDevice, RIDI_DEVICENAME, raw, &size) == static_cast<UINT>(-1)) {
+            continue;
+        }
+        std::wstring path(raw);
+        for (auto& c : path) {
+            c = static_cast<wchar_t>(towupper(c));
+        }
+        if (path.find(L"IG_") == std::wstring::npos) {
+            continue;
+        }
+        const auto vid_at = path.find(L"VID");
+        const auto pid_at = path.find(L"PID");
+        if (vid_at == std::wstring::npos || pid_at == std::wstring::npos || pid_at <= vid_at ||
+            pid_at + 8 > path.size()) {
+            continue;
+        }
+        const std::wstring vid_part = path.substr(vid_at, pid_at - vid_at);
+        if (vid_part.find(vid_hex) != std::wstring::npos && path.compare(pid_at + 4, 4, pid_hex) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 BOOL CALLBACK dinput_enum_callback(LPCDIDEVICEINSTANCEW instance, void* context) {
@@ -1050,8 +1165,18 @@ BOOL CALLBACK dinput_enum_callback(LPCDIDEVICEINSTANCEW instance, void* context)
     }
     devices.name[devices.count] = instance->tszProductName;
     devices.device[devices.count] = device;
+    devices.model[devices.count] = detect_dinput_model(*instance, device);
+    devices.xinput_twin[devices.count] = dinput_is_xinput_twin(*instance);
     ++devices.count;
     return DIENUM_CONTINUE;
+}
+
+DiModel dinput_model(int slot) {
+    const auto& devices = dinput_devices();
+    if (slot < 0 || slot >= devices.count) {
+        return DiModel::generic;
+    }
+    return devices.model[static_cast<std::size_t>(slot)];
 }
 
 void open_dinput(HINSTANCE instance) {
@@ -1125,6 +1250,8 @@ void rescan_dinput() {
     for (auto& name : devices.name) {
         name.clear();
     }
+    devices.model.fill(DiModel::generic);
+    devices.xinput_twin.fill(false);
     devices.count = 0;
     devices.api->EnumDevices(DI8DEVCLASS_GAMECTRL, dinput_enum_callback, &devices,
                              DIEDFL_ATTACHEDONLY);
@@ -1221,9 +1348,49 @@ bool dinput_active(const DIJOYSTATE2& state, PadInput code) {
     return (state.rgbButtons[button] & 0x80) != 0;
 }
 
-std::wstring dinput_input_name(PadInput code) {
+std::wstring dinput_input_name(PadInput code, DiModel model = DiModel::generic) {
     if (code == kPadInputNone) {
         return L"(none)";
+    }
+    // A PlayStation pad's inputs by their printed names. DualShock 4 and
+    // DualSense share one numbering: the four face buttons from Square
+    // clockwise to Triangle, then L1 R1 L2 R2, Share/Create, Options, L3 R3,
+    // PS, the touchpad press (and the DualSense's mute). The left stick is X/Y,
+    // the right stick Z/Rz, and the analog triggers Rx/Ry.
+    if (model == DiModel::dualshock4 || model == DiModel::dualsense) {
+        if (code >= kDiAxisBase) {
+            static const wchar_t* axes[kDiAxisCount * 2] = {
+                L"L-stick Left", L"L-stick Right", L"L-stick Up", L"L-stick Down",
+                L"R-stick Left", L"R-stick Right", L"L2 (analog)", L"L2 (analog)",
+                L"R2 (analog)", L"R2 (analog)", L"R-stick Up", L"R-stick Down"};
+            const auto index = static_cast<std::size_t>(code - kDiAxisBase);
+            if (index < std::size(axes)) {
+                return axes[index];
+            }
+        } else if (code >= kDiPovBase) {
+            static const wchar_t* hats[4] = {L"D-pad Up", L"D-pad Right", L"D-pad Down", L"D-pad Left"};
+            return hats[(code - kDiPovBase) & 3];
+        } else {
+            static const wchar_t* buttons[] = {L"Square", L"Cross", L"Circle", L"Triangle", L"L1", L"R1",
+                                               L"L2", L"R2", L"Share", L"Options", L"L3", L"R3",
+                                               L"PS", L"Touchpad", L"Mute"};
+            const auto index = static_cast<std::size_t>(code - kDiButtonBase);
+            if (index < std::size(buttons)) {
+                if (index == 8 && model == DiModel::dualsense) {
+                    return L"Create";
+                }
+                return buttons[index];
+            }
+        }
+    } else if (model == DiModel::dualshock3 && code < kDiPovBase) {
+        // The PS3's own order, the d-pad among the buttons.
+        static const wchar_t* buttons[] = {L"Select", L"L3", L"R3", L"Start", L"D-pad Up", L"D-pad Right",
+                                           L"D-pad Down", L"D-pad Left", L"L2", L"R2", L"L1", L"R1",
+                                           L"Triangle", L"Circle", L"Cross", L"Square", L"PS"};
+        const auto index = static_cast<std::size_t>(code - kDiButtonBase);
+        if (index < std::size(buttons)) {
+            return buttons[index];
+        }
     }
     if (code >= kDiAxisBase) {
         static const wchar_t* axes[kDiAxisCount] = {L"X", L"Y", L"Z", L"Rx", L"Ry", L"Rz"};
@@ -1332,6 +1499,138 @@ void set_default_dinput_bindings(PlayerInput& input) {
     input.dpad[static_cast<int>(PadButton::mode)] = kDiButtonBase + 8;
 }
 
+// A PlayStation pad's Mega Drive layout: the same places as on an Xbox pad -
+// A/B/C along the bottom row of the face buttons (Square, Cross, Circle),
+// X/Y/Z on L1, Triangle and R1, Start on Options (Start on a PS3), Mode on
+// Share/Create (Select on a PS3), the d-pad for directions.
+void set_model_dinput_bindings(PlayerInput& input, DiModel model) {
+    if (model == DiModel::generic) {
+        set_default_dinput_bindings(input);
+        return;
+    }
+    input.dpad = {};
+    const auto bind = [&input](PadButton button, PadInput code) {
+        input.dpad[static_cast<int>(button)] = code;
+    };
+    if (model == DiModel::dualshock3) {
+        bind(PadButton::up, kDiButtonBase + 4);
+        bind(PadButton::right, kDiButtonBase + 5);
+        bind(PadButton::down, kDiButtonBase + 6);
+        bind(PadButton::left, kDiButtonBase + 7);
+        bind(PadButton::a, kDiButtonBase + 15);     // Square
+        bind(PadButton::b, kDiButtonBase + 14);     // Cross
+        bind(PadButton::c, kDiButtonBase + 13);     // Circle
+        bind(PadButton::x, kDiButtonBase + 10);     // L1
+        bind(PadButton::y, kDiButtonBase + 12);     // Triangle
+        bind(PadButton::z, kDiButtonBase + 11);     // R1
+        bind(PadButton::start, kDiButtonBase + 3);  // Start
+        bind(PadButton::mode, kDiButtonBase + 0);   // Select
+        return;
+    }
+    bind(PadButton::up, kDiPovBase + 0);
+    bind(PadButton::right, kDiPovBase + 1);
+    bind(PadButton::down, kDiPovBase + 2);
+    bind(PadButton::left, kDiPovBase + 3);
+    bind(PadButton::a, kDiButtonBase + 0);      // Square
+    bind(PadButton::b, kDiButtonBase + 1);      // Cross
+    bind(PadButton::c, kDiButtonBase + 2);      // Circle
+    bind(PadButton::x, kDiButtonBase + 4);      // L1
+    bind(PadButton::y, kDiButtonBase + 3);      // Triangle
+    bind(PadButton::z, kDiButtonBase + 5);      // R1
+    bind(PadButton::start, kDiButtonBase + 9);  // Options
+    bind(PadButton::mode, kDiButtonBase + 8);   // Share / Create
+}
+
+// Give a player the layout of the PlayStation pad they are on, but only while
+// their DirectInput bindings are still the generic defaults - never over a
+// layout someone has set up by hand. True when it changed something.
+bool adopt_model_layout(PlayerInput& input, DiModel model) {
+    if (model == DiModel::generic) {
+        return false;
+    }
+    PlayerInput generic;
+    set_default_dinput_bindings(generic);
+    for (int index = 0; index < kPadButtonCount; ++index) {
+        // Only the twelve pad rows: the gun rows are not DirectInput's.
+        const auto button = static_cast<PadButton>(index);
+        if (button == PadButton::gun_trigger || button == PadButton::gun_reload) {
+            continue;
+        }
+        if (input.dpad[index] != generic.dpad[index]) {
+            return false;
+        }
+    }
+    const auto keep = input.dpad;
+    set_model_dinput_bindings(input, model);
+    // The gun rows ride along unchanged.
+    input.dpad[static_cast<int>(PadButton::gun_trigger)] = keep[static_cast<int>(PadButton::gun_trigger)];
+    input.dpad[static_cast<int>(PadButton::gun_reload)] = keep[static_cast<int>(PadButton::gun_reload)];
+    return true;
+}
+
+// AUTOMATIC (issue #6): put an Automatic player on whatever is there. A pad the
+// player is already on stays theirs while it answers. Otherwise the first
+// XInput pad the other player isn't using, then the first DirectInput pad that
+// is neither in use nor an XInput pad listed twice, then the keyboard. XInput
+// comes first because a pad that speaks it is laid out the same on every model.
+// The mouse is left alone: a light gun or the piano has the seat. Each model's
+// bindings live in their own array, so moving between devices loses nothing.
+// Returns true when the device or slot changed.
+bool resolve_automatic_device(PlayerInput& input, const PlayerInput& other) {
+    if (!input.automatic || input.device == InputDevice::mouse) {
+        return false;
+    }
+    const auto& devices = dinput_devices();
+    if (input.device == InputDevice::xinput) {
+        bool connected = false;
+        (void)read_gamepad(input.pad_slot, connected);
+        if (connected) {
+            return false;
+        }
+    } else if (input.device == InputDevice::dinput && input.pad_slot >= 0 && input.pad_slot < devices.count &&
+               !devices.xinput_twin[static_cast<std::size_t>(input.pad_slot)]) {
+        DIJOYSTATE2 ignored{};
+        if (read_dinput(input.pad_slot, ignored)) {
+            return false;
+        }
+    }
+    const auto taken = [&other](InputDevice device, int slot) {
+        return other.device == device && other.pad_slot == slot;
+    };
+    const auto move_to = [&input](InputDevice device, int slot) {
+        const bool changed = input.device != device || input.pad_slot != slot;
+        input.device = device;
+        input.pad_slot = slot;
+        return changed;
+    };
+    for (int slot = 0; slot < 4; ++slot) {
+        if (taken(InputDevice::xinput, slot)) {
+            continue;
+        }
+        bool connected = false;
+        (void)read_gamepad(slot, connected);
+        if (connected) {
+            return move_to(InputDevice::xinput, slot);
+        }
+    }
+    for (int slot = 0; slot < devices.count; ++slot) {
+        if (taken(InputDevice::dinput, slot) || devices.xinput_twin[static_cast<std::size_t>(slot)]) {
+            continue;
+        }
+        DIJOYSTATE2 ignored{};
+        if (read_dinput(slot, ignored)) {
+            const bool changed = move_to(InputDevice::dinput, slot);
+            adopt_model_layout(input, devices.model[static_cast<std::size_t>(slot)]);
+            return changed;
+        }
+    }
+    // Nothing plugged in. The slot is kept, so the pad that comes back is
+    // looked for where it was.
+    const bool changed = input.device != InputDevice::keyboard;
+    input.device = InputDevice::keyboard;
+    return changed;
+}
+
 // A gun's trigger and reload, which are only ever reachable when that player is
 // holding a gun, so both players get them regardless of what they are set to.
 // Also used as a migration: a config written before these rows existed has them
@@ -1368,6 +1667,12 @@ void set_default_input(RuntimeState& state) {
     set_default_pad_bindings(p1);
     set_default_dinput_bindings(p1);
     p1.pad_slot = 0;
+    // A new install plays on whatever is plugged in (issue #6): a pad if there
+    // is one, the keys above if not. A settings file that names a device
+    // turns this off when it loads (see load_settings), so nobody's existing
+    // choice changes. Player 2 stays an empty port until someone picks
+    // something - ESPN Sunday Night NFL (issue #13) depends on that.
+    p1.automatic = true;
 
     auto& p2 = state.players[1];
     p2.kind = PadKind::three_button;
@@ -1465,6 +1770,24 @@ int find_moved_pad(const RuntimeState& state, int player) {
 void poll_gamepads(RuntimeState& state) {
     for (int player = 0; player < 2; ++player) {
         auto& input = state.players[player];
+        // Automatic (issue #6): a player who is not on a pad that answers
+        // looks for one twice a second. Asking XInput about an empty slot is
+        // slow, so not every frame. A pad that went away has already let go
+        // of its buttons below by the time this moves the player.
+        if (input.automatic && input.device != InputDevice::mouse) {
+            const bool on_pad = device_is_gamepad(input.device) && state.pad_connected[player];
+            if (!on_pad && --state.auto_search_countdown[player] <= 0) {
+                state.auto_search_countdown[player] = 30;
+                if (resolve_automatic_device(input, state.players[1 - player])) {
+                    state.pad_connected[player] = false;
+                    state.dinput_previous[player] = DIJOYSTATE2{};
+                    const auto& devices = dinput_devices();
+                    if (input.device == InputDevice::dinput && input.pad_slot < devices.count) {
+                        state.dinput_pad_name[player] = devices.name[static_cast<std::size_t>(input.pad_slot)];
+                    }
+                }
+            }
+        }
         if (!device_is_gamepad(input.device)) {
             // If the player switched away from a pad, let go of anything the
             // pad was still holding.
@@ -1503,6 +1826,9 @@ void poll_gamepads(RuntimeState& state) {
             }
             if (connected && input.pad_slot < devices.count) {
                 state.dinput_pad_name[player] = devices.name[input.pad_slot];
+                // A PlayStation pad on untouched default bindings gets its own
+                // layout (issue #6). Any binding set by hand stops this.
+                adopt_model_layout(input, devices.model[static_cast<std::size_t>(input.pad_slot)]);
             }
             const bool was_connected = state.pad_connected[player];
             state.pad_connected[player] = connected;
@@ -3003,7 +3329,10 @@ void write_diagnostic_log(RuntimeState& state) {
                 << devices.acquire_failures << " acquire\n";
         }
         for (int slot = 0; slot < devices.count; ++slot) {
-            out << "  slot " << slot << "         : " << narrow(devices.name[slot]) << "\n";
+            const wchar_t* model = dinput_model_name(devices.model[static_cast<std::size_t>(slot)]);
+            out << "  slot " << slot << "         : " << narrow(devices.name[slot])
+                << (model != nullptr ? " [" + narrow(model) + " layout]" : std::string())
+                << (devices.xinput_twin[static_cast<std::size_t>(slot)] ? " [also XInput]" : "") << "\n";
         }
         for (int player = 0; player < 2; ++player) {
             const auto& input = state.players[player];
@@ -3037,6 +3366,7 @@ void write_diagnostic_log(RuntimeState& state) {
                 }
             }
             out << "player " << (player + 1) << "         : "
+                << (input.automatic ? "Automatic -> " : "")
                 << kDeviceNames[static_cast<int>(input.device)] << ", "
                 << kKindNames[static_cast<int>(input.kind)] << ", slot " << input.pad_slot << ", "
                 << bound << " bound, " << usable << " reaching the game\n";
@@ -4319,6 +4649,15 @@ void load_settings(RuntimeState& state) {
             if (player >= 0 && player < 2 && device >= 0 &&
                 device <= static_cast<int>(InputDevice::mouse)) {
                 state.players[player].device = static_cast<InputDevice>(device);
+                // A file from before Automatic existed names a device and
+                // nothing else: that device is the player's choice. A newer
+                // file follows with padN_auto, which turns it back on.
+                state.players[player].automatic = false;
+            }
+        } else if (key.rfind("pad", 0) == 0 && key.find("_auto") != std::string::npos) {
+            const int player = key[3] - '1';
+            if (player >= 0 && player < 2) {
+                state.players[player].automatic = std::atoi(value.c_str()) != 0;
             }
         } else if (key.rfind("pad", 0) == 0 && key.find("_slot") != std::string::npos) {
             const int player = key[3] - '1';
@@ -4472,6 +4811,8 @@ void save_settings(const RuntimeState& state) {
         const auto saved = piano_saved_input(state, player);
         out << prefix << "_kind=" << static_cast<int>(saved.kind) << "\n";
         out << prefix << "_device=" << static_cast<int>(saved.device) << "\n";
+        // After _device, which clears it on load (see load_settings).
+        out << prefix << "_auto=" << (state.players[player].automatic ? 1 : 0) << "\n";
         out << prefix << "_slot=" << state.players[player].pad_slot << "\n";
         out << prefix << "_dname=" << narrow(state.dinput_pad_name[player]) << "\n";
         for (int button = 0; button < kPadButtonCount; ++button) {
@@ -6352,19 +6693,37 @@ struct ConfigDraft {
 
 constexpr UINT_PTR kPadCaptureTimer = 2;
 constexpr UINT_PTR kPadStatusTimer = 3;
+// The device dropdown lists the InputDevice values in order, then Automatic,
+// which is a flag on top of them rather than a device (PlayerInput::automatic).
+constexpr int kAutomaticDeviceIndex = 4;
 
-void refresh_pad_presence(ConfigDraft& draft) {
+// Whether each player's pad answers, for the line under the picture, and an
+// Automatic player moved to whatever is plugged in. True when an Automatic
+// player changed device, so the bindings shown need redrawing.
+bool refresh_pad_presence(ConfigDraft& draft) {
+    bool moved = false;
     for (int player = 0; player < 2; ++player) {
         bool connected = false;
-        const auto& input = draft.players[player];
+        auto& input = draft.players[player];
+        // Not while that player is binding a button: the box would change
+        // device under the press being waited for.
+        if (draft.capture_player != player && resolve_automatic_device(input, draft.players[1 - player])) {
+            moved = true;
+        }
         if (input.device == InputDevice::xinput) {
             read_gamepad(input.pad_slot, connected);
         } else if (input.device == InputDevice::dinput) {
             DIJOYSTATE2 ignored{};
             connected = read_dinput(input.pad_slot, ignored);
+            // Show a PlayStation pad's own layout the moment it is chosen, so
+            // the boxes read Cross / Circle rather than generic numbers.
+            if (connected) {
+                adopt_model_layout(input, dinput_model(input.pad_slot));
+            }
         }
         draft.pad_present[player] = connected;
     }
+    return moved;
 }
 
 // Capturing a key has to happen BEFORE the dialog manager sees it. Tab, Enter,
@@ -7217,6 +7576,7 @@ bool save_profile(const std::wstring& name, const PlayerInput& input) {
     const std::string prefix = "pad1";
     out << prefix << "_kind=" << static_cast<int>(input.kind) << "\n";
     out << prefix << "_device=" << static_cast<int>(input.device) << "\n";
+    out << prefix << "_auto=" << (input.automatic ? 1 : 0) << "\n";
     out << prefix << "_slot=" << input.pad_slot << "\n";
     for (int button = 0; button < kPadButtonCount; ++button) {
         out << prefix << "_key" << button << "=" << input.keys[button] << "\n";
@@ -7254,7 +7614,11 @@ bool load_profile(const std::wstring& name, PlayerInput& input) {
             const int device = std::atoi(value.c_str());
             if (device >= 0 && device <= static_cast<int>(InputDevice::mouse)) {
                 input.device = static_cast<InputDevice>(device);
+                // As in load_settings: an older profile names a device only.
+                input.automatic = false;
             }
+        } else if (key.find("_auto") != std::string::npos) {
+            input.automatic = std::atoi(value.c_str()) != 0;
         } else if (key.find("_slot") != std::string::npos) {
             const int slot = std::atoi(value.c_str());
             if (slot >= 0 && slot < 4) {
@@ -7720,9 +8084,18 @@ void sync_player_controls(HWND page, ConfigDraft& draft, int player) {
         input.device = InputDevice::mouse;
     } else if (input.device == InputDevice::mouse) {
         input.device = InputDevice::keyboard;
+        // Back from a gun or the piano: an Automatic player takes the pad
+        // that is there now, not on the next status tick.
+        resolve_automatic_device(input, draft.players[1 - player]);
     }
     SendDlgItemMessageW(page, kind_id, CB_SETCURSEL, static_cast<WPARAM>(shown), 0);
-    SendDlgItemMessageW(page, device_id, CB_SETCURSEL, static_cast<WPARAM>(input.device), 0);
+    // Automatic shows as Automatic whatever it has picked; the line under the
+    // picture says what that is. A gun or the piano shows Mouse, the truth.
+    const bool show_automatic = input.automatic && !gun && !piano;
+    SendDlgItemMessageW(page, device_id, CB_SETCURSEL,
+                        static_cast<WPARAM>(show_automatic ? kAutomaticDeviceIndex
+                                                           : static_cast<int>(input.device)),
+                        0);
     EnableWindow(GetDlgItem(page, device_id), (gun || piano) ? FALSE : TRUE);
     InvalidateRect(GetDlgItem(page, pic_id), nullptr, TRUE);
 }
@@ -7943,6 +8316,9 @@ void draw_pad_picture(const ConfigDraft& draft, DRAWITEMSTRUCT* item) {
     // Whether the chosen controller is actually there, said plainly under the
     // artwork. XInput reports no difference between a pad on a cable and one on
     // Bluetooth, so the wording does not claim to know which it is.
+    // An Automatic player says what it picked: the pad, or the keyboard when
+    // nothing is plugged in.
+    const bool automatic_shown = input.automatic && input.device != InputDevice::mouse;
     if (device_is_gamepad(input.device)) {
         RECT status = client;
         status.left = layout.art.left;
@@ -7950,10 +8326,24 @@ void draw_pad_picture(const ConfigDraft& draft, DRAWITEMSTRUCT* item) {
         status.top = layout.art.bottom - 14;
         const bool present = draft.pad_present[player];
         SetTextColor(dc, present ? theme.text : dim_text);
-        const std::wstring text =
-            present ? (L"Controller " + std::to_wstring(input.pad_slot + 1) + L": connected")
-                    : (L"Controller " + std::to_wstring(input.pad_slot + 1) + L": not found");
+        // Name a PlayStation pad when it is one, so it is plain which pad
+        // the layout and button names belong to.
+        const wchar_t* model = input.device == InputDevice::dinput
+                                   ? dinput_model_name(dinput_model(input.pad_slot))
+                                   : nullptr;
+        const std::wstring which = std::wstring(automatic_shown ? L"Automatic: " : L"") + L"Controller " +
+                                   std::to_wstring(input.pad_slot + 1) +
+                                   (model != nullptr ? (std::wstring(L" (") + model + L")") : L"");
+        const std::wstring text = present ? (which + L": connected") : (which + L": not found");
         DrawTextW(dc, text.c_str(), -1, &status, DT_CENTER | DT_SINGLELINE);
+    } else if (automatic_shown) {
+        RECT status = client;
+        status.left = layout.art.left;
+        status.right = layout.art.right;
+        status.top = layout.art.bottom - 14;
+        SetTextColor(dc, dim_text);
+        DrawTextW(dc, L"Automatic: no controller found, using the keyboard", -1, &status,
+                  DT_CENTER | DT_SINGLELINE);
     }
 
     // The Master System devices: what the mouse does, and that this is port 1
@@ -8039,7 +8429,7 @@ void draw_pad_picture(const ConfigDraft& draft, DRAWITEMSTRUCT* item) {
         const bool bound = on_pad ? binding != kPadInputNone : input.keys[index] != 0;
         const auto name = waiting ? std::wstring(on_pad ? L"press a button..." : L"press a key...")
                           : !on_pad ? key_display_name(input.keys[index])
-                          : on_di   ? dinput_input_name(binding)
+                          : on_di   ? dinput_input_name(binding, dinput_model(input.pad_slot))
                                     : pad_input_name(binding);
         SetTextColor(dc, waiting ? live_edge : (!bound ? dim_text : theme.text));
         DrawTextW(dc, name.c_str(), -1, &text, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
@@ -8082,7 +8472,9 @@ INT_PTR CALLBACK input_page_proc(HWND page, UINT message, WPARAM wparam, LPARAM 
             // Named after the driver model, which is the thing that actually
             // differs. Whether a pad is on a cable or on Bluetooth changes
             // nothing about how it is read.
-            static const wchar_t* devices[] = {L"Keyboard", L"XInput", L"DirectInput", L"Mouse"};
+            // Then Automatic, at kAutomaticDeviceIndex.
+            static const wchar_t* devices[] = {L"Keyboard", L"XInput", L"DirectInput", L"Mouse",
+                                               L"Automatic"};
             for (const int id : {IDC_IN_P1_KIND, IDC_IN_P2_KIND}) {
                 // In PadKind order: the selection index IS the kind.
                 for (const auto kind : {PadKind::three_button, PadKind::six_button,
@@ -8171,8 +8563,8 @@ INT_PTR CALLBACK input_page_proc(HWND page, UINT message, WPARAM wparam, LPARAM 
             }
             if (wparam == kPadStatusTimer) {
                 const auto before = draft->pad_present;
-                refresh_pad_presence(*draft);
-                if (before != draft->pad_present) {
+                const bool moved = refresh_pad_presence(*draft);
+                if (moved || before != draft->pad_present) {
                     InvalidateRect(GetDlgItem(page, IDC_IN_P1_PIC), nullptr, FALSE);
                     InvalidateRect(GetDlgItem(page, IDC_IN_P2_PIC), nullptr, FALSE);
                 }
@@ -8295,7 +8687,19 @@ INT_PTR CALLBACK input_page_proc(HWND page, UINT message, WPARAM wparam, LPARAM 
                 const int player = control == IDC_IN_P2_DEVICE ? 1 : 0;
                 const auto chosen = SendDlgItemMessageW(page, control, CB_GETCURSEL, 0, 0);
                 if (chosen != CB_ERR) {
-                    draft->players[player].device = static_cast<InputDevice>(chosen);
+                    auto& input = draft->players[player];
+                    if (chosen == kAutomaticDeviceIndex) {
+                        // Picked at once, so the boxes show the pad's bindings
+                        // (or the keys) straight away.
+                        input.automatic = true;
+                        if (input.device == InputDevice::mouse) {
+                            input.device = InputDevice::keyboard;
+                        }
+                        resolve_automatic_device(input, draft->players[1 - player]);
+                    } else {
+                        input.automatic = false;
+                        input.device = static_cast<InputDevice>(chosen);
+                    }
                     // Whether a pad is actually there is shown in the panel
                     // rather than in a message box: a modal interruption every
                     // time the dropdown changes is worse than a line of text
@@ -11456,6 +11860,11 @@ void begin_gear_link(RuntimeState& primary) {
     second->settings_name = L"settings-gearlink2.txt";
     second->link_secondary = true;
     set_default_input(*second);
+    // Not Automatic out of the box: both windows read pads in the background,
+    // so two Automatic player 1s would both take the first pad and one press
+    // would move both consoles. The second console starts on the keyboard,
+    // as it always has; Automatic is still in its dropdown.
+    second->players[0].automatic = false;
     set_default_hotkeys(second->hotkeys);
     load_settings(*second);
     // The first window's look, not whatever the second file happened to say -

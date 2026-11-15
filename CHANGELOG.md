@@ -33,6 +33,25 @@
   in player 1's list in **Configure → Input**, with their own pictures and
   binding rows: Trigger on the Phaser; Turn left, Turn right and Button on
   the paddle. Mega Drive games keep player 1's pad whichever is chosen.
+- **PlayStation controllers, and controllers found automatically** (issue #6).
+  - **DualShock 4 and DualSense pads are recognised** when Windows sees them
+    through DirectInput, which is how they arrive with no extra software.
+    GenX gives them the same Mega Drive layout as an Xbox pad: A, B and C on
+    Square, Cross and Circle; X, Y and Z on L1, Triangle and R1; Start on
+    Options; Mode on Share (Create on a DualSense); and the d-pad. The Input
+    tab names their buttons as printed (Cross, Circle, L2 and so on) and
+    says which pad it found, for example "Controller 1 (DualShock 4)".
+  - **A DualShock 3** gets its own layout when it comes through DsHidMini
+    in its native (SDF) mode. Through any driver that turns a PlayStation
+    pad into an Xbox one, such as DS4Windows, it is simply an Xbox pad.
+  - **Bindings you set yourself are never replaced.** The PlayStation layout
+    is only applied over GenX's untouched defaults.
+  - **New: Automatic in the Input tab's device list.** GenX uses whatever is
+    plugged in: an Xbox-style (XInput) pad first, then any other pad, then
+    the keyboard when there is none. It switches when a pad is plugged in
+    or taken out, and the line under the picture says what it picked. A
+    new install starts player 1 on Automatic; existing settings keep the
+    device they already have. Two Automatic players never take the same pad.
 - **Sega CD → 32X plugged in.** Untick it to run Sega CD discs on a console
   with no 32X attached. Fahrenheit's first disc then plays its Sega CD version
   instead of asking for disc 2, and Surgical Strike skips its "Sega CD or 32X"

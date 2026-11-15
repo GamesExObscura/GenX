@@ -439,7 +439,49 @@ private:
     }
     void derive_raster_samples() noexcept;
 
+    // Save-state version 8: a DMA fill still running (the 68000 carries on
+    // meanwhile), address bit 16 for 128K mode, the last four data-port
+    // words (the write FIFO a CRAM/VSRAM fill takes its value from) and
+    // VSRAM's unused entries 40-63.
+    template <typename Archive>
+    void visit_dma_state(Archive& ar) {
+        ar(fill_busy_cycles_);
+        ar(address_bit16_);
+        ar(fifo_words_);
+        ar(fifo_pos_);
+        ar(vsram_hidden_);
+        if constexpr (Archive::loading()) {
+            fifo_pos_ &= 3;
+            if (fill_busy_cycles_ > 4'000'000) fill_busy_cycles_ = 4'000'000;
+            if (fill_busy_cycles_ == 0) dma_busy_ = false;
+        }
+    }
+    void reset_dma_state() noexcept {
+        fill_busy_cycles_ = 0;
+        address_bit16_ = false;
+        fifo_words_.fill(0);
+        fifo_pos_ = 0;
+        vsram_hidden_.fill(0);
+    }
+
   private:
+    // A fill or copy in progress, in 68000 cycles still to run (see dma_fill).
+    std::uint32_t fill_busy_cycles_ = 0;
+    // Bit 16 of the VRAM address (second control word, bit 2). Only 128K VRAM
+    // mode (register 1 bit 7) uses it.
+    bool address_bit16_ = false;
+    std::array<std::uint16_t, 4> fifo_words_{};
+    std::uint8_t fifo_pos_ = 0;
+    // VSRAM decodes 64 entries; only the first 40 scroll anything.
+    std::array<std::uint16_t, 24> vsram_hidden_{};
+    void finish_fill_before_access() noexcept;
+    void store_vsram(std::uint32_t address, std::uint16_t value, bool via_dma) noexcept;
+    [[nodiscard]] std::uint16_t load_vsram(std::uint32_t address) const noexcept;
+    [[nodiscard]] bool vram_128k() const noexcept;
+    [[nodiscard]] std::uint32_t address17() const noexcept {
+        return (address_bit16_ ? 0x10000u : 0u) | (address_ & 0xFFFFu);
+    }
+    void store_vram_128k(std::uint16_t value) noexcept;
     std::vector<std::uint8_t> vram_ = std::vector<std::uint8_t>(kVramBytes, 0);
     std::array<std::uint16_t, kCramEntries> cram_{};
     std::array<std::uint16_t, kVsramEntries> vsram_{};

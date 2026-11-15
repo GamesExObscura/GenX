@@ -422,6 +422,15 @@ void ThirtyTwoX::build_m68k_boot_page() noexcept {
         poke16(m68k_boot_page_, at, 0x4E75);  // rts
     }
 
+    // $C0: write D0's low byte to (A1), then clear RV so the Mega Drive sees
+    // the cartridge again. notaz's PD testsuite ("32x md bios", issue #17)
+    // calls it with A1 pointing at work RAM and checks the byte arrived.
+    poke16(m68k_boot_page_, 0xC0, 0x1280);        // move.b d0,(a1)
+    poke16(m68k_boot_page_, 0xC2, 0x0239);        // andi.b #$FE,($A15107).l
+    poke16(m68k_boot_page_, 0xC4, 0x00FE);
+    poke32(m68k_boot_page_, 0xC6, 0x00A15107);
+    // ...and the RTS at $CA is already there.
+
     // $D4 is the one service worth having: set the cartridge's ROM banking.
     // The caller points A0 at eight bytes and the routine writes them into
     // the bank registers from $A130F1 upward, every other byte, then clears
@@ -652,6 +661,7 @@ void ThirtyTwoX::end_vblank() noexcept {
         return;
     }
     vdp_.end_vblank();
+    adapter_.end_vint_window();
 }
 
 std::uint32_t ThirtyTwoX::run(std::uint32_t cycles) noexcept {

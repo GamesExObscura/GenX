@@ -834,6 +834,9 @@ void Genesis::write16(std::uint32_t address, std::uint16_t value) noexcept {
         return;
     }
     if (address >= kZ80Base && address <= kZ80End) {
+        if (m68k_write_to_z80_ram_dropped(address)) {
+            return;
+        }
         z80_write(static_cast<std::uint16_t>(address & 0x7FFF), static_cast<std::uint8_t>(value >> 8));
         return;
     }
@@ -842,10 +845,12 @@ void Genesis::write16(std::uint32_t address, std::uint16_t value) noexcept {
         return;
     }
     if (address >= kZ80BusReq && address < (kZ80BusReq + 0x100)) {
+        note_z80_control_write(address, value, false);
         z80_bus_requested_ = (value & 0x0100) != 0;
         return;
     }
     if (address >= kZ80Reset && address < (kZ80Reset + 0x100)) {
+        note_z80_control_write(address, value, false);
         const bool released = (value & 0x0100) != 0;
         if (released && z80_reset_asserted_) {
             z80_.reset();
@@ -1003,6 +1008,9 @@ void Genesis::write8(std::uint32_t address, std::uint8_t value) noexcept {
         return;
     }
     if (address >= kZ80Base && address <= kZ80End) {
+        if (m68k_write_to_z80_ram_dropped(address)) {
+            return;
+        }
         z80_write(static_cast<std::uint16_t>(address & 0x7FFF), value);
         return;
     }
@@ -1044,10 +1052,12 @@ void Genesis::write8(std::uint32_t address, std::uint8_t value) noexcept {
         return;
     }
     if (address >= kZ80BusReq && address < (kZ80BusReq + 0x100)) {
+        note_z80_control_write(address, value, true);
         z80_bus_requested_ = (value & 0x01) != 0;
         return;
     }
     if (address >= kZ80Reset && address < (kZ80Reset + 0x100)) {
+        note_z80_control_write(address, value, true);
         const bool released = (value & 0x01) != 0;
         if (released && z80_reset_asserted_) {
             z80_.reset();
@@ -1169,6 +1179,70 @@ void Genesis::write_io(std::uint32_t address, std::uint8_t value) noexcept {
 }
 
 // --- Z80 address space -----------------------------------------------------
+
+namespace {
+struct Z80ControlWrite {
+    std::uint32_t address = 0;
+    std::uint16_t value = 0;
+    std::uint32_t pc = 0;
+    std::uint32_t frame = 0;
+    bool byte = false;
+};
+// Diagnostics only (MERCURY_LOG_Z80RAM_DROPS).
+std::array<Z80ControlWrite, 8> g_z80_control_log{};
+}  // namespace
+
+// THE 68000 REACHES Z80 RAM ONLY THROUGH THE Z80'S BUS. With the Z80 running
+// and the bus not requested, a 68000 write to its RAM goes nowhere. notaz's
+// PD testsuite ("z80 ram noreq write", issue #17) releases the bus, writes,
+// takes the bus back and finds the old byte. Only the RAM is gated here (the
+// YM2612 and the rest of the Z80's map are as before), and a Z80 held in
+// reset leaves its RAM to the 68000 as it always has.
+// MERCURY_Z80RAM_NOREQ_WRITES=1 lets the writes through again.
+bool Genesis::m68k_write_to_z80_ram_dropped(std::uint32_t address) noexcept {
+    static const bool allow = [] {
+        const char* e = std::getenv("MERCURY_Z80RAM_NOREQ_WRITES");
+        return e != nullptr && e[0] != '0';
+    }();
+    if (allow || (address & 0x7FFF) >= 0x4000 || z80_bus_requested_ || z80_reset_asserted_) {
+        return false;
+    }
+    ++z80_ram_writes_dropped_;
+    // MERCURY_LOG_Z80RAM_DROPS=1: the first few dropped writes, with the
+    // 68000's PC, to stderr.
+    static const bool log = [] {
+        const char* e = std::getenv("MERCURY_LOG_Z80RAM_DROPS");
+        return e != nullptr && e[0] != '0';
+    }();
+    if (log && z80_ram_writes_dropped_ <= 12) {
+        std::fprintf(stderr, "z80ram drop #%llu addr=%06X pc=%06X frame=%u\n",
+                     static_cast<unsigned long long>(z80_ram_writes_dropped_), address & 0xFFFFFF,
+                     m68k_.registers().pc, vdp_.frames_elapsed());
+        if (z80_ram_writes_dropped_ == 1) {
+            for (const auto& w : g_z80_control_log) {
+                if (w.address != 0) {
+                    std::fprintf(stderr, "   earlier %s %06X <- %04X pc=%06X frame=%u\n", w.byte ? "byte" : "word",
+                                 w.address, w.value, w.pc, w.frame);
+                }
+            }
+        }
+    }
+    return true;
+}
+
+// MERCURY_LOG_Z80RAM_DROPS: the last eight writes to $A111xx/$A112xx, printed
+// with the first dropped write so it shows how the game handled the bus.
+void Genesis::note_z80_control_write(std::uint32_t address, std::uint16_t value, bool byte) noexcept {
+    static const bool log = [] {
+        const char* e = std::getenv("MERCURY_LOG_Z80RAM_DROPS");
+        return e != nullptr && e[0] != '0';
+    }();
+    if (!log) {
+        return;
+    }
+    std::rotate(g_z80_control_log.begin(), g_z80_control_log.begin() + 1, g_z80_control_log.end());
+    g_z80_control_log.back() = {address & 0xFFFFFF, value, m68k_.registers().pc, vdp_.frames_elapsed(), byte};
+}
 
 std::uint8_t Genesis::z80_read(std::uint16_t address) noexcept {
     if (address < 0x4000) {

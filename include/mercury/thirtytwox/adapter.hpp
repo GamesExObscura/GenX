@@ -254,11 +254,16 @@ class Adapter {
     // Raise these sources in both processors, each gated by its own mask.
     // Reset is the exception: it is not maskable.
     void raise_sh2_interrupt(std::uint8_t sources) noexcept;
+    // Vertical blank is over: a vertical interrupt nobody took is withdrawn.
+    void end_vint_window() noexcept;
     // The highest level standing against one processor, or 0 for none.
     // Inline, because the scheduler asks before every SH-2 instruction.
     [[nodiscard]] int pending_sh2_level(int which) const noexcept {
         const std::size_t index = which != 0 ? 1 : 0;
-        unsigned pending = sh2_pending_[index];
+        // Raised interrupts stay latched while masked; the mask decides only
+        // whether the processor takes one (see raise_sh2_interrupt).
+        unsigned pending = sh2_pending_[index] &
+                           static_cast<unsigned>(kIrqVres | (sh2_interrupt_mask_[index] << 3));
         // The command interrupt is not latched. It stands for exactly as long
         // as the 68000 leaves its bit set in the interrupt control register,
         // so a game that clears the register drops it without the SH-2 doing
@@ -299,6 +304,12 @@ class Adapter {
         ar(dreq_fifo_);
         ar(dreq_fifo_count_);
     }
+    // Genesis state version 8 appends bit 8 of $A1511A.
+    template <typename Archive>
+    void visit_v8_state(Archive& ar) {
+        ar(tv_register_bit8_);
+    }
+    void reset_v8_state() noexcept { tv_register_bit8_ = false; }
 
   private:
     std::uint16_t control_ = kPowerOnControl;
@@ -325,6 +336,7 @@ class Adapter {
     std::uint64_t dreq_words_in_ = 0;
     std::uint64_t dreq_words_dropped_ = 0;
     bool tv_register_ = false;
+    bool tv_register_bit8_ = false;
     bool cartridge_present_ = true;
     Pwm pwm_{};
     bool hint_during_vblank_ = false;

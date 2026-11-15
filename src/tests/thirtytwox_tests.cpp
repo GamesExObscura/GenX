@@ -173,10 +173,46 @@ void test_interrupts_are_levels() {
     check_eq(static_cast<std::uint32_t>(adapter.pending_sh2_level(1)), 0,
              "and the slave's acknowledgement clears only its own");
 
+    // ...but the master's was kept: unmasking inside the blank takes it
+    // (PD testsuite, "32x irq vint", issue #17), and the blank's end drops it.
+    adapter.sh2_write8(0x01, Adapter::kSh2IntVint, 0);
+    check_eq(static_cast<std::uint32_t>(adapter.pending_sh2_level(0)), 12,
+             "a vertical interrupt raised while masked is taken on unmasking");
+    adapter.end_vint_window();
+    check_eq(static_cast<std::uint32_t>(adapter.pending_sh2_level(0)), 0,
+             "and one nobody took is gone when the blank ends");
+    // Other sources raised while masked are not kept.
+    adapter.sh2_write8(0x01, 0, 0);
+    adapter.raise_sh2_interrupt(Adapter::kIrqPwm);
+    adapter.sh2_write8(0x01, Adapter::kSh2IntPwm, 0);
+    check_eq(static_cast<std::uint32_t>(adapter.pending_sh2_level(0)), 0,
+             "a PWM interrupt raised while masked is not taken later");
+    adapter.sh2_write8(0x01, 0, 0);
+
     // Reset is not maskable, and outranks everything else.
     adapter.raise_sh2_interrupt(Adapter::kIrqVres);
     check_eq(static_cast<std::uint32_t>(adapter.pending_sh2_level(0)), 14,
              "reset gets through a mask that blocks everything else");
+}
+
+// What the Mega Drive side's registers keep of a write, per notaz's PD
+// testsuite ("32x init", "32x reg w", issue #17).
+void test_register_write_masks() {
+    std::printf("32X registers keep only their real bits\n");
+    using Adapter = mercury::thirtytwox::Adapter;
+    Adapter adapter;
+    adapter.reset();
+    check_eq(adapter.read16(0xA15110), 0xFFFF, "the DREQ length powers on as $FFFF");
+    adapter.write16(Adapter::kDreqControl, 0xFFFF);
+    check_eq(adapter.read16(Adapter::kDreqControl) & 0x7F7F, 0x0007, "DREQ control keeps bits 0-2");
+    adapter.write16(Adapter::kDreqControl, 0);
+    adapter.write16(0xA1510C, 0xFFFF);
+    adapter.write16(0xA1510E, 0xFFFF);
+    check_eq(adapter.read16(0xA1510E), 0xFFFF, "the DREQ target keeps its odd bit");
+    adapter.write16(0xA1510A, 0xFFFF);
+    check_eq(adapter.read16(0xA1510A), 0xFFFE, "the DREQ source does not");
+    adapter.write16(Adapter::kTvRegister, 0xFFFF);
+    check_eq(adapter.read16(Adapter::kTvRegister), 0x0101, "$A1511A keeps bits 0 and 8");
 }
 
 void test_rom_bank_selection() {
@@ -981,6 +1017,7 @@ int main() {
     test_communication_port_is_one_storage_two_windows();
     test_byte_access_picks_a_half();
     test_interrupts_are_levels();
+    test_register_write_masks();
     test_rom_bank_selection();
     test_vdp_ownership();
     test_cached_and_cache_through_are_one_memory();

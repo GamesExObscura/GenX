@@ -70,6 +70,36 @@
   last line. GenX applied it to that line, which drew it with the wrong sprite
   size. GenX now settles each line's sprites just before the line starts, as
   the console does.
+- **Stray tiles and wrong scrolling gone in Air Diver, Joe Montana II Sports
+  Talk Football, NFL Sports Talk Football '93, World Trophy Soccer and
+  TaleSpin.** The Mega Drive's vertical-scroll memory has room for 64 values,
+  of which only the first 40 scroll anything. These games write past the
+  40th, and GenX wrapped those writes back onto the first columns' scroll
+  values. Air Diver's map lost its left edge, the two football games showed
+  junk along the top, World Trophy Soccer's "First Round" title was missing,
+  and TaleSpin had a black band across the top. The extra writes now go where
+  they go on a console, out of sight.
+- **No more junk line at the top of Contra: Hard Corps' story screens, or dark
+  bar beside Madden NFL 97's score.** These come from how a video memory
+  "fill" places its bytes. GenX now places them as the console does, which
+  notaz's PD testsuite checks (issue #17).
+- **More Mega Drive video and sound-CPU rules from notaz's PD testsuite**
+  (issue #17), each checked against the whole library:
+  - Setting a video register ends the memory command in progress.
+  - The 68000 can't write the sound CPU's memory without first taking its bus.
+    Joe & Mac, Cosmic Spacehead, ESWAT, James Pond II and Last Action Hero all
+    try to, and their sound now behaves as it does in Genesis Plus GX.
+  - The rarely used 128K video memory mode is supported.
+- **32X details from the same suite** (issue #17):
+  - The 32X's data-request registers keep exactly the bits a console does.
+  - When GenX runs a 32X game without the BIOS files, the start-up routine
+    games can call at $C0 now does its job.
+  - A 32X vertical interrupt that arrives while an SH-2 has it switched off
+    waits until the end of the vertical blank. If the SH-2 switches it on
+    before then, it gets the interrupt.
+
+  All 30 32X games were checked against these. With both sets of changes, the
+  suite's score goes from 20 to 33 of 57 tests.
 - **Master System timing now matches the console in FluBBa's VDP Test**
   (issue #3). The test's timing page now passes in full:
   - The H counter (port $7F) keeps its value until something latches it.

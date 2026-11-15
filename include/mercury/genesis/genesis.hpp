@@ -185,6 +185,11 @@ private:
     // --- Z80 address space ---
     [[nodiscard]] std::uint8_t z80_read(std::uint16_t address) noexcept;
     void z80_write(std::uint16_t address, std::uint8_t value) noexcept;
+    // A 68000 write into Z80 RAM while it does not hold the Z80's bus (see
+    // genesis.cpp). Counted in z80_ram_writes_dropped().
+    bool m68k_write_to_z80_ram_dropped(std::uint32_t address) noexcept;
+    void note_z80_control_write(std::uint32_t address, std::uint16_t value, bool byte) noexcept;
+    [[nodiscard]] std::uint64_t z80_ram_writes_dropped() const noexcept { return z80_ram_writes_dropped_; }
 
   public:
     // --- controller-port register traffic ---------------------------------
@@ -285,7 +290,10 @@ private:
     // Version 7 appends the T-5740 board's SPI EEPROM state machine (Pier
     // Solar) after those, for the same reason. Its 64KB array is the battery
     // RAM, which every version already carries.
-    static constexpr std::uint32_t kStateVersion = 7;
+    //
+    // Version 8 appends the VDP's DMA state (Vdp::visit_dma_state): a fill
+    // still running, address bit 16, the write FIFO and VSRAM's unused entries.
+    static constexpr std::uint32_t kStateVersion = 8;
     static constexpr std::uint8_t kMediaCd = 0x01;
     static constexpr std::uint8_t kMedia32x = 0x02;
     static constexpr std::uint8_t kMediaSvp = 0x04;
@@ -330,6 +338,17 @@ private:
             spi_eeprom_.visit_state(ar);
         } else if constexpr (Archive::loading()) {
             spi_eeprom_.reset();
+        }
+        if (version >= 8) {
+            vdp_.visit_dma_state(ar);
+            if ((media & kMedia32x) != 0) {
+                thirtytwox_->adapter().visit_v8_state(ar);
+            }
+        } else if constexpr (Archive::loading()) {
+            vdp_.reset_dma_state();
+            if ((media & kMedia32x) != 0) {
+                thirtytwox_->adapter().reset_v8_state();
+            }
         }
         if constexpr (Archive::loading()) {
             sanitize_loaded();
@@ -493,6 +512,7 @@ private:
     // Bus arbitration. The 68000 asks for the Z80's bus and must see the
     // request granted before its accesses to A00000-A0FFFF mean anything.
     bool z80_bus_requested_ = false;
+    std::uint64_t z80_ram_writes_dropped_ = 0;
     bool z80_reset_asserted_ = true;
     std::uint32_t z80_bank_ = 0;
     // Bank register is loaded one bit at a time, LSB first, over nine writes.

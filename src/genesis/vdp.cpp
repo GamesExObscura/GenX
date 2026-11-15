@@ -203,6 +203,7 @@ void Vdp::reset() noexcept {
     sprite_collision_ = false;
     dma_busy_ = false;
     dma_fill_pending_ = false;
+    reset_dma_state();
     odd_frame_ = false;
     hv_latch_ = 0;
     hv_latched_ = false;
@@ -352,6 +353,7 @@ Vdp::Target Vdp::target_of(std::uint8_t code) const noexcept {
 }
 
 void Vdp::write_control(std::uint16_t value) noexcept {
+    finish_fill_before_access();
 
     if (!first_word_written_ && (value & 0xE000) == 0x8000) {
         // Register write. Note this is only recognised when no command is half
@@ -360,6 +362,21 @@ void Vdp::write_control(std::uint16_t value) noexcept {
 
         write_register(static_cast<std::uint8_t>((value >> 8) & 0x1F),
                        static_cast<std::uint8_t>(value & 0xFF));
+        // A REGISTER WRITE IS ALSO A FIRST COMMAND WORD: it loads the low
+        // fourteen address bits and the low two code bits, which it sets to
+        // 2 - no memory. A data write after it stores nothing until a new
+        // command is sent. notaz's PD testsuite ("vdp reg w cmd reset", issue
+        // #17) writes VRAM, sets register 1, writes again, and finds only the
+        // first write; Genesis Plus GX does the same.
+        // MERCURY_REG_WRITE_KEEPS_CMD=1 restores the old behaviour.
+        static const bool keeps_command = [] {
+            const char* e = std::getenv("MERCURY_REG_WRITE_KEEPS_CMD");
+            return e != nullptr && e[0] != '0';
+        }();
+        if (!keeps_command) {
+            address_ = (address_ & 0xC000) | (value & 0x3FFF);
+            command_code_ = static_cast<std::uint8_t>((command_code_ & 0x3C) | ((value >> 14) & 0x03));
+        }
         return;
     }
 
@@ -377,6 +394,9 @@ void Vdp::write_control(std::uint16_t value) noexcept {
     first_word_written_ = false;
     address_ = static_cast<std::uint32_t>(((value & 0x0003) << 14) |
                                           (pending_first_word_ & 0x3FFF));
+    // Bit 2 of the second word is address bit 16, which only 128K VRAM mode
+    // looks at (vram_128k).
+    address_bit16_ = (value & 0x0004) != 0;
     command_code_ = static_cast<std::uint8_t>(((value >> 2) & 0x3C) |
                                               ((pending_first_word_ >> 14) & 0x03));
 
@@ -409,7 +429,7 @@ void Vdp::write_control(std::uint16_t value) noexcept {
         switch (target_of(command_code_)) {
             case Target::vram: read_buffer_ = read_vram16(address_); break;
             case Target::cram: read_buffer_ = cram_[(address_ >> 1) % kCramEntries]; break;
-            case Target::vsram: read_buffer_ = vsram_[(address_ >> 1) % kVsramEntries]; break;
+            case Target::vsram: read_buffer_ = load_vsram(address_); break;
             default: break;
         }
     }
@@ -574,10 +594,78 @@ std::uint16_t Vdp::read_hv_counter() noexcept {
 // --- data port -------------------------------------------------------------
 
 void Vdp::advance_address() noexcept {
+    if (vram_128k()) {
+        // 128K mode counts across address bit 16.
+        const auto next = (address17() + registers_[kRegAutoIncrement]) & 0x1FFFFu;
+        address_ = next & 0xFFFFu;
+        address_bit16_ = (next & 0x10000u) != 0;
+        return;
+    }
     address_ = (address_ + registers_[kRegAutoIncrement]) & 0xFFFF;
 }
 
+// 128K VRAM MODE (register 1 bit 7, for consoles fitted with 128KB of VRAM):
+// each word written stores only its low byte, at an address rebuilt from the
+// 17-bit one - bit 1 inverted into bit 0, bit 10 into bit 1, bits 11-16 down
+// one place. notaz's PD testsuite ("dma 128k mode", "vdp 128k addr bit16",
+// issue #17) gives the mapping and checks it, for DMA and for data writes.
+// A stock console has 64KB and no game sets the bit.
+bool Vdp::vram_128k() const noexcept {
+    return (registers_[kRegModeSet2] & 0x80) != 0;
+}
+
+void Vdp::store_vram_128k(std::uint16_t value) noexcept {
+    const std::uint32_t a = address17();
+    const std::uint32_t byte = (((a & 2) >> 1) ^ 1) | ((a & 0x400) >> 9) | (a & 0x3FC) | ((a & 0x1F800) >> 1);
+    vram_[byte & 0xFFFF] = static_cast<std::uint8_t>(value & 0xFF);
+}
+
+// VSRAM DECODES 64 ENTRIES (address bits 1-6) and keeps only the first 40 for
+// scrolling; a write to the rest goes to cells nothing displays. Wrapping the
+// index at 40 instead put a DMA that runs off the end of the 40 back over the
+// start - notaz's PD testsuite ("dma vsram wrap", issue #17) starts one at
+// entry 30 and expects entry 0 to get the 35th word, not the 11th.
+// MERCURY_VSRAM_MOD40=1 restores the old wrap.
+namespace {
+bool vsram_mod40() {
+    static const bool on = [] {
+        const char* e = std::getenv("MERCURY_VSRAM_MOD40");
+        return e != nullptr && e[0] != '0';
+    }();
+    return on;
+}
+}  // namespace
+
+void Vdp::store_vsram(std::uint32_t address, std::uint16_t value, bool via_dma) noexcept {
+    const auto masked = static_cast<std::uint16_t>(value & 0x03FF);
+    std::size_t index = vsram_mod40() ? (address >> 1) % kVsramEntries : (address & 0x7E) >> 1;
+    if (index >= kVsramEntries) {
+        vsram_hidden_[(index - kVsramEntries) % vsram_hidden_.size()] = masked;
+        return;
+    }
+    note_vsram_write(index, masked, via_dma);
+    vsram_[index] = masked;
+}
+
+std::uint16_t Vdp::load_vsram(std::uint32_t address) const noexcept {
+    std::size_t index = vsram_mod40() ? (address >> 1) % kVsramEntries : (address & 0x7E) >> 1;
+    return index < kVsramEntries ? vsram_[index] : vsram_hidden_[(index - kVsramEntries) % vsram_hidden_.size()];
+}
+
+// A FILL OR COPY RUNS WHILE THE 68000 CARRIES ON (see dma_fill); touching the
+// data port, or writing the control port, waits for it to finish. That wait is
+// charged to the instruction that made the access, as the whole fill used to
+// be charged to the one that started it.
+void Vdp::finish_fill_before_access() noexcept {
+    if (fill_busy_cycles_ != 0) {
+        pending_dma_cycles_ += fill_busy_cycles_;
+        fill_busy_cycles_ = 0;
+        dma_busy_ = false;
+    }
+}
+
 std::uint16_t Vdp::read_data() noexcept {
+    finish_fill_before_access();
     // Touching the data port abandons a half-written command, exactly as
     // reading the control port does. See the note in write_data().
     first_word_written_ = false;
@@ -586,7 +674,7 @@ std::uint16_t Vdp::read_data() noexcept {
     switch (target_of(command_code_)) {
         case Target::vram: read_buffer_ = read_vram16(address_); break;
         case Target::cram: read_buffer_ = cram_[(address_ >> 1) % kCramEntries]; break;
-        case Target::vsram: read_buffer_ = vsram_[(address_ >> 1) % kVsramEntries]; break;
+        case Target::vsram: read_buffer_ = load_vsram(address_); break;
         default: break;
     }
     return value;
@@ -601,8 +689,13 @@ void Vdp::write_data(std::uint16_t value) noexcept {
     // register write carries its data in the low byte, any value with bit 7 set
     // lands on CD5 and starts a DMA that was never asked for, with whatever
     // source and length the registers happen to hold.
+    finish_fill_before_access();
     first_word_written_ = false;
     ++data_write_count_;
+    // The last four words written: the VDP's write FIFO, which a CRAM or
+    // VSRAM fill takes its value from (see dma_fill).
+    fifo_words_[fifo_pos_] = value;
+    fifo_pos_ = static_cast<std::uint8_t>((fifo_pos_ + 1) & 3);
     if (dma_fill_pending_) {
         dma_fill_pending_ = false;
         dma_fill(value);
@@ -642,6 +735,10 @@ void Vdp::write_data(std::uint16_t value) noexcept {
                 ++d_port_log_pos_;
             }
             note_vram_write(address_, value, /*via_dma=*/false);
+            if (vram_128k()) {
+                store_vram_128k(value);
+                break;
+            }
             const auto base = address_ & 0xFFFE;
             if ((address_ & 1) != 0) {
                 vram_[base] = static_cast<std::uint8_t>(value & 0xFF);
@@ -660,10 +757,9 @@ void Vdp::write_data(std::uint16_t value) noexcept {
             ++vsram_write_count_;
             if (std::FILE* log = cram_dma_log(frames_elapsed_)) {
                 std::fprintf(log, "V %u %u %u idx=%u val=%03X\n", frames_elapsed_, scanline_, cycles_into_line_,
-                             static_cast<unsigned>((address_ >> 1) % kVsramEntries), value & 0x03FFu);
+                             static_cast<unsigned>((address_ & 0x7E) >> 1), value & 0x03FFu);
             }
-            note_vsram_write((address_ >> 1) % kVsramEntries, static_cast<std::uint16_t>(value & 0x03FF), false);
-            vsram_[(address_ >> 1) % kVsramEntries] = static_cast<std::uint16_t>(value & 0x03FF);
+            store_vsram(address_, value, false);
             break;
         default:
             ++invalid_write_count_;
@@ -766,6 +862,10 @@ void Vdp::dma_from_memory() noexcept {
         switch (target) {
             case Target::vram: {
                 note_vram_write(address_, word, /*via_dma=*/true);
+                if (vram_128k()) {
+                    store_vram_128k(word);
+                    break;
+                }
                 const auto base = address_ & 0xFFFE;
                 if ((address_ & 1) != 0) {
                     vram_[base] = static_cast<std::uint8_t>(word & 0xFF);
@@ -780,8 +880,7 @@ void Vdp::dma_from_memory() noexcept {
                 cram_[(address_ >> 1) % kCramEntries] = static_cast<std::uint16_t>(word & 0x0EEE);
                 break;
             case Target::vsram:
-                note_vsram_write((address_ >> 1) % kVsramEntries, static_cast<std::uint16_t>(word & 0x03FF), true);
-                vsram_[(address_ >> 1) % kVsramEntries] = static_cast<std::uint16_t>(word & 0x03FF);
+                store_vsram(address_, word, true);
                 break;
             default:
                 break;
@@ -812,21 +911,86 @@ void Vdp::dma_fill(std::uint16_t value) noexcept {
     if (length == 0) {
         length = 0x10000;
     }
-    // The fill writes the HIGH byte of the data word to successive addresses,
-    // after the initial word write lands normally.
-    const auto fill_byte = static_cast<std::uint8_t>(value >> 8);
-    const auto base = address_ & 0xFFFE;
-    vram_[base] = static_cast<std::uint8_t>(value >> 8);
-    vram_[base + 1] = static_cast<std::uint8_t>(value & 0xFF);
-    note_vram_write(base, value, /*via_dma=*/true);
-    for (std::uint32_t i = 0; i < length; ++i) {
-        advance_address();
-        note_vram_write(address_ & 0xFFFF, fill_byte, /*via_dma=*/true);
-        vram_[address_ & 0xFFFF] = fill_byte;
+    // Measured against notaz's PD testsuite (issue #17), each with a switch
+    // back to the old way for A/B runs:
+    //  - The word that starts the fill is an ordinary data-port write - its
+    //    halves swapped at an odd VRAM address - and each step after it puts
+    //    the HIGH byte at the next address XOR 1 ("dma fill3 odd/even": with
+    //    increment 3 from $101 the bytes land at $105, $106, $10B).
+    //    MERCURY_FILL_NO_XOR=1.
+    //  - A CRAM or VSRAM fill writes whole words, and the word is the oldest
+    //    one in the VDP's four-entry write FIFO, not the one that started it
+    //    ("dma fill3 vsram"). It used to write bytes into VRAM instead.
+    //    MERCURY_FILL_VRAM_ONLY=1.
+    //  - The source registers count on by the length, as for any DMA ("dma
+    //    fill src incr"). MERCURY_FILL_NO_SRC=1.
+    //  - On a console the 68000 is not held while the fill runs: the status
+    //    port reports the DMA busy bit until it ends ("dma zero len + fill"
+    //    reads it at once), and the next data-port access or control write
+    //    waits for it. MERCURY_FILL_RUNS=1 does that here. It is OFF by
+    //    default: nearly every game fills VRAM at boot, so it shifted the
+    //    timing of 690 of the 694 cartridges in the library sweep (170 ended
+    //    the run on a different frame, none failed to boot) - far more
+    //    change than one test result can justify. The 68000 is held for the
+    //    whole fill, as before, and that check stays failing.
+    static const auto flag = [](const char* name) {
+        const char* e = std::getenv(name);
+        return e != nullptr && e[0] != '0';
+    };
+    static const bool no_xor = flag("MERCURY_FILL_NO_XOR");
+    static const bool vram_only = flag("MERCURY_FILL_VRAM_ONLY");
+    static const bool no_src = flag("MERCURY_FILL_NO_SRC");
+    static const bool stalls = !flag("MERCURY_FILL_RUNS");
+
+    const auto target = target_of(command_code_);
+    if (!vram_only && (target == Target::cram || target == Target::vsram)) {
+        const std::uint16_t word = fifo_words_[fifo_pos_];  // the oldest of the four
+        if (target == Target::cram) {
+            cram_[(address_ >> 1) % kCramEntries] = static_cast<std::uint16_t>(value & 0x0EEE);
+        } else {
+            store_vsram(address_, value, true);
+        }
+        for (std::uint32_t i = 0; i < length; ++i) {
+            advance_address();
+            if (target == Target::cram) {
+                cram_[(address_ >> 1) % kCramEntries] = static_cast<std::uint16_t>(word & 0x0EEE);
+            } else {
+                store_vsram(address_, word, true);
+            }
+        }
+    } else {
+        const auto fill_byte = static_cast<std::uint8_t>(value >> 8);
+        const auto base = address_ & 0xFFFE;
+        if (!no_xor && (address_ & 1) != 0) {
+            vram_[base] = static_cast<std::uint8_t>(value & 0xFF);
+            vram_[base + 1] = static_cast<std::uint8_t>(value >> 8);
+        } else {
+            vram_[base] = static_cast<std::uint8_t>(value >> 8);
+            vram_[base + 1] = static_cast<std::uint8_t>(value & 0xFF);
+        }
+        note_vram_write(base, value, /*via_dma=*/true);
+        for (std::uint32_t i = 0; i < length; ++i) {
+            advance_address();
+            const auto at = (no_xor ? address_ : address_ ^ 1) & 0xFFFF;
+            note_vram_write(at, fill_byte, /*via_dma=*/true);
+            vram_[at] = fill_byte;
+        }
     }
     registers_[kRegDmaLengthLow] = 0;
     registers_[kRegDmaLengthHigh] = 0;
-    pending_dma_cycles_ += dma_cycles_for(length, wide_mode(), !display_enabled() || vblank_flag_);
+    if (!no_src) {
+        const auto source = static_cast<std::uint32_t>((registers_[kRegDmaSourceMid] << 8) |
+                                                       registers_[kRegDmaSourceLow]) + length;
+        registers_[kRegDmaSourceLow] = static_cast<std::uint8_t>(source & 0xFF);
+        registers_[kRegDmaSourceMid] = static_cast<std::uint8_t>((source >> 8) & 0xFF);
+    }
+    const auto cycles = dma_cycles_for(length, wide_mode(), !display_enabled() || vblank_flag_);
+    if (stalls) {
+        pending_dma_cycles_ += cycles;
+    } else {
+        fill_busy_cycles_ = cycles;
+        dma_busy_ = cycles != 0;
+    }
 }
 
 void Vdp::dma_copy() noexcept {
@@ -1008,6 +1172,15 @@ void Vdp::derive_raster_samples() noexcept {
 
 bool Vdp::advance_cycles(std::uint32_t m68k_cycles) noexcept {
     bool frame_completed = false;
+    // A fill running alongside the 68000 (see dma_fill) ends here.
+    if (fill_busy_cycles_ != 0) {
+        if (m68k_cycles >= fill_busy_cycles_) {
+            fill_busy_cycles_ = 0;
+            dma_busy_ = false;
+        } else {
+            fill_busy_cycles_ -= m68k_cycles;
+        }
+    }
     if (vint_assert_delay_ > 0) {
         vint_assert_delay_ -= static_cast<std::int32_t>(m68k_cycles);
         if (vint_assert_delay_ <= 0) {

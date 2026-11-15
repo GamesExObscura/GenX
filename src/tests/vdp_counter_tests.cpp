@@ -201,6 +201,74 @@ int main() {
         check_value(vdp.vram()[0x2003], 0xDD, "second copy carries on: byte $2003");
     }
 
+    // RULES FROM notaz's PD testsuite (issue #17).
+    {
+        using mercury::genesis::Vdp;
+        const auto fresh = [](Vdp& vdp) {
+            vdp.reset();
+            vdp.write_control(0x8114);  // mode 5, DMA enabled
+            vdp.write_control(0x8F02);
+        };
+        const auto vram_byte = [](const Vdp& vdp, unsigned a) { return static_cast<unsigned>(vdp.vram()[a]); };
+
+        // A fill: the first word is an ordinary write (swapped at an odd
+        // address), each step puts the high byte at the next address XOR 1.
+        {
+            Vdp vdp;
+            fresh(vdp);
+            vdp.write_control(0x8F03);  // increment 3
+            vdp.write_control(0x9303);  // length 3
+            vdp.write_control(0x9400);
+            vdp.write_control(0x9780);  // fill
+            vdp.write_control(0x4101);  // VRAM $101, DMA
+            vdp.write_control(0x0080);
+            vdp.write_data(0x1122);
+            check_value(vram_byte(vdp, 0x100), 0x22, "fill from $101: the first word is swapped ($100 = $22)");
+            check_value(vram_byte(vdp, 0x101), 0x11, "...($101 = $11)");
+            check_value(vram_byte(vdp, 0x105), 0x11, "...then $104^1 = $105 gets the high byte");
+            check_value(vram_byte(vdp, 0x104), 0x00, "...and $104 does not");
+            check_value(vram_byte(vdp, 0x10B), 0x11, "...$10A^1 = $10B the last");
+            // The fill counted the source registers on by its length.
+            check_value(vdp.registers()[0x15], 0x03, "a fill advances the source registers by its length");
+        }
+
+        // VSRAM decodes 64 entries; a write past the 40th lands nowhere visible.
+        {
+            Vdp vdp;
+            fresh(vdp);
+            vdp.write_control(0x4050);  // VSRAM write at $50 (entry 40)
+            vdp.write_control(0x0010);
+            vdp.write_data(0x0123);
+            check_value(vdp.vsram_entry(0), 0x000, "a VSRAM write at entry 40 does not wrap onto entry 0");
+        }
+
+        // A register write after a VRAM command: the next data write is lost.
+        {
+            Vdp vdp;
+            fresh(vdp);
+            vdp.write_control(0x8F00);  // increment 0
+            vdp.write_control(0x4100);  // VRAM write $100
+            vdp.write_control(0x0000);
+            vdp.write_data(0x0304);
+            vdp.write_control(0x8144);  // a register write
+            vdp.write_data(0x0708);
+            check_value(vram_byte(vdp, 0x101), 0x04, "a register write ends the command: the next write is dropped");
+        }
+
+        // 128K VRAM mode: low byte only, at the rebuilt address.
+        {
+            Vdp vdp;
+            fresh(vdp);
+            vdp.write_control(0x8194);  // 128K mode, DMA enabled
+            vdp.write_control(0x4100);  // VRAM write $100
+            vdp.write_control(0x0000);
+            vdp.write_data(0x5A11);     // $100 -> byte $101
+            vdp.write_data(0x5A22);     // $102 -> byte $100
+            check_value(vram_byte(vdp, 0x101), 0x11, "128K mode: word at $100 stores its low byte at $101");
+            check_value(vram_byte(vdp, 0x100), 0x22, "128K mode: word at $102 stores its low byte at $100");
+        }
+    }
+
     std::printf("\n%s\n", failures == 0 ? "all V counter checks passed" : "FAILURES");
     return failures == 0 ? 0 : 1;
 }

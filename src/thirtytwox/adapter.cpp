@@ -47,8 +47,11 @@ void Adapter::reset() noexcept {
     hint_countdown_ = 0;
     dreq_source_ = 0;
     dreq_target_ = 0;
-    dreq_length_ = 0;
+    // $A15110 powers on as all ones (notaz's PD testsuite, "32x init", issue
+    // #17, reads $FFFF before anything is written).
+    dreq_length_ = 0xFFFF;
     tv_register_ = false;
+    tv_register_bit8_ = false;
     pwm_.reset();
     hint_during_vblank_ = false;
 }
@@ -79,7 +82,8 @@ std::uint16_t Adapter::read16(std::uint32_t address) const noexcept {
         case kDreqControl:
             return static_cast<std::uint16_t>((dreq_control_ & ~kFull) |
                                               (dreq_fifo_full() ? kFull : 0u));
-        case kTvRegister: return tv_register_ ? 0x0001u : 0x0000u;
+        case kTvRegister:
+            return static_cast<std::uint16_t>((tv_register_ ? 0x0001u : 0u) | (tv_register_bit8_ ? 0x0100u : 0u));
         // The same data request block the processors see, from this side.
         case kControl + kDreqSourceHigh: return static_cast<std::uint16_t>(dreq_source_ >> 16);
         case kControl + kDreqSourceLow: return static_cast<std::uint16_t>(dreq_source_);
@@ -133,9 +137,11 @@ void Adapter::write16(std::uint32_t address, std::uint16_t value) noexcept {
             bank_ = static_cast<std::uint16_t>(value & 0x0003u);
             return;
         case kDreqControl: {
-            // FULL is the FIFO reporting on itself and is not writable.
+            // Only bits 0-2 (RV, DMA, 68S) are writable; FULL is the FIFO
+            // reporting on itself. notaz's PD testsuite ("32x init", issue
+            // #17) writes $FFFF and reads back $0007.
             const bool was_open = (dreq_control_ & k68s) != 0;
-            dreq_control_ = static_cast<std::uint16_t>(value & ~kFull);
+            dreq_control_ = static_cast<std::uint16_t>(value & 0x0007u);
             if (tracing()) {
                 std::fprintf(stderr, "[32x] 68000 writes dreq control = %04X (fifo %zu, length %u)\n",
                              value, dreq_fifo_count_, static_cast<unsigned>(dreq_length_));
@@ -172,7 +178,10 @@ void Adapter::write16(std::uint32_t address, std::uint16_t value) noexcept {
             }
             return;
         case kTvRegister:
+            // Bits 0 and 8 hold what is written (PD testsuite: $FFFF reads
+            // back as $0101).
             tv_register_ = (value & 0x0001u) != 0;
+            tv_register_bit8_ = (value & 0x0100u) != 0;
             return;
         // The data request block, writable from this side too.
         case kControl + kDreqSourceHigh:
@@ -187,7 +196,10 @@ void Adapter::write16(std::uint32_t address, std::uint16_t value) noexcept {
                            (static_cast<std::uint32_t>(value & 0xFFu) << 16);
             return;
         case kControl + kDreqTargetLow:
-            dreq_target_ = (dreq_target_ & 0xFF0000u) | (value & 0xFFFEu);
+            // All sixteen bits: only the SOURCE drops its odd bit (PD
+            // testsuite: the target reads back $00FFFFFF, the source
+            // $00FFFFFE).
+            dreq_target_ = (dreq_target_ & 0xFF0000u) | value;
             return;
         case kControl + kDreqLength:
             dreq_length_ = static_cast<std::uint16_t>(value & 0xFFFCu);
@@ -343,7 +355,7 @@ void Adapter::sh2_write16(std::uint32_t offset, std::uint16_t value, int which) 
         case kDreqSourceLow:  dreq_source_ = (dreq_source_ & 0xFF0000u) | (value & 0xFFFEu); return;
         case kDreqTargetHigh: dreq_target_ = (dreq_target_ & 0x00FFFFu) |
                                      (static_cast<std::uint32_t>(value & 0xFFu) << 16); return;
-        case kDreqTargetLow:  dreq_target_ = (dreq_target_ & 0xFF0000u) | (value & 0xFFFEu); return;
+        case kDreqTargetLow:  dreq_target_ = (dreq_target_ & 0xFF0000u) | value; return;
         case kDreqLength:     dreq_length_ = static_cast<std::uint16_t>(value & 0xFFFCu); return;
         default: {
             if (even < kSh2ClearFirst || even > kSh2ClearLast) {
@@ -407,13 +419,52 @@ void Adapter::comm_write(int index, std::uint16_t value) noexcept {
 }
 
 void Adapter::raise_sh2_interrupt(std::uint8_t sources) noexcept {
+    // A VERTICAL INTERRUPT RAISED WHILE MASKED STAYS PENDING for the rest of
+    // the blank (see end_vint_window), and the processor takes it as soon as
+    // it unmasks; the mask is applied in pending_sh2_level. notaz's PD
+    // testsuite ("32x irq vint", issue #17) lets one happen with both SH-2s
+    // masked, unmasks the slave inside the blank, and expects it taken at
+    // once. Dropping it at raise time meant the slave never saw it.
+    //
+    // ONLY the vertical interrupt. Keeping every source while masked was
+    // tried, and four games - Spider-Man: Web of Fire, Star Trek Starfleet
+    // Academy, T-Mek, World Series Baseball - went to a black screen with the
+    // SH-2s running garbage: an old horizontal, command or PWM interrupt was
+    // taken the moment a game unmasked it, before it was ready. The others
+    // are still recorded only when enabled. MERCURY_32X_IRQ_MASKED_DROP=1
+    // treats the vertical interrupt that way too.
+    static const bool drop_masked = [] {
+        const char* e = std::getenv("MERCURY_32X_IRQ_MASKED_DROP");
+        return e != nullptr && e[0] != '0';
+    }();
     for (std::size_t which = 0; which < sh2_pending_.size(); ++which) {
-        // Reset gets through whatever the mask says. Everything else needs
-        // its enable, and the four enable bits sit three places below the
-        // interrupts they gate.
-        const auto allowed =
-            static_cast<std::uint8_t>(kIrqVres | (sh2_interrupt_mask_[which] << 3));
+        // The four enable bits sit three places below the interrupts they
+        // gate; reset is not maskable.
+        auto allowed = static_cast<std::uint8_t>(kIrqVres | (sh2_interrupt_mask_[which] << 3));
+        if (!drop_masked) {
+            allowed = static_cast<std::uint8_t>(allowed | kIrqVint);
+        }
         sh2_pending_[which] |= static_cast<std::uint8_t>(sources & allowed);
+    }
+}
+
+// THE VERTICAL INTERRUPT LASTS FOR THE VERTICAL BLANK. Raised as blanking
+// starts, it stays pending (masked or not) until a processor clears it or the
+// blank ends; one nobody took by then is gone. notaz's PD testsuite ("32x irq
+// vint", issue #17) unmasks a processor at line 0 and expects nothing, and
+// unmasks one inside the blank and expects the interrupt at once - and counts
+// exactly one taken by a master whose SR held it off for many frames before.
+// MERCURY_32X_VINT_SPANS_FRAME=1 keeps an untaken one pending, as before.
+void Adapter::end_vint_window() noexcept {
+    static const bool spans = [] {
+        const char* e = std::getenv("MERCURY_32X_VINT_SPANS_FRAME");
+        return e != nullptr && e[0] != '0';
+    }();
+    if (spans) {
+        return;
+    }
+    for (auto& pending : sh2_pending_) {
+        pending = static_cast<std::uint8_t>(pending & ~kIrqVint);
     }
 }
 

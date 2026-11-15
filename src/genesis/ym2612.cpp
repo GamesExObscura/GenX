@@ -145,9 +145,17 @@ void Ym2612::reset_chip() noexcept {
     for (auto& bank : register_file_) {
         bank.fill(0);
     }
+    // MERCURY_YM_RESET_TL0=1: total level comes back as 0 (full volume), the
+    // value of a cleared register on the chip and in Genesis Plus GX's reset.
+    // The envelope still starts fully attenuated, so nothing sounds until a
+    // key-on either way.
+    static const bool tl_zero = [] {
+        const char* e = std::getenv("MERCURY_YM_RESET_TL0");
+        return e != nullptr && e[0] != '0';
+    }();
     for (auto& channel : channels_) {
         for (auto& op : channel.operators) {
-            op.total_level = 0x7F;
+            op.total_level = tl_zero ? 0 : 0x7F;
             op.envelope = 1023;
             op.phase_state = Operator::Phase::release;
         }

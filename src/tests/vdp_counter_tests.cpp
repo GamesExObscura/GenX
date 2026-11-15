@@ -201,6 +201,43 @@ int main() {
         check_value(vdp.vram()[0x2003], 0xDD, "second copy carries on: byte $2003");
     }
 
+    // SHADOW/HIGHLIGHT: A HIGH-PRIORITY TILE KEEPS FULL BRIGHTNESS EVEN WHERE
+    // IT IS TRANSPARENT (issue #24). Plane A is all high-priority tile 0
+    // (empty); low-priority plane B shows through it in red. The red must come
+    // out at full strength, not halved.
+    {
+        using mercury::genesis::Vdp;
+        const auto red_at_line0 = [](bool plane_a_high) {
+            Vdp vdp;
+            vdp.reset();
+            vdp.write_control(0x8144);  // display on, mode 5
+            vdp.write_control(0x8C89);  // H40 + shadow/highlight
+            vdp.write_control(0x8230);  // plane A at $C000
+            vdp.write_control(0x8407);  // plane B at $E000
+            vdp.write_control(0x9001);  // 64x32
+            vdp.write_control(0x8F02);
+            vdp.write_control(0xC002);  // CRAM entry 1 = bright red
+            vdp.write_control(0x0000);
+            vdp.write_data(0x000E);
+            vdp.write_control(0x4020);  // tile 1: every pixel colour 1
+            vdp.write_control(0x0000);
+            for (int i = 0; i < 16; ++i) vdp.write_data(0x1111);
+            vdp.write_control(0x4000);  // plane A row 0: tile 0, priority as asked
+            vdp.write_control(0x0003);
+            for (int i = 0; i < 64; ++i) vdp.write_data(plane_a_high ? 0x8000 : 0x0000);
+            vdp.write_control(0x6000);  // plane B row 0: tile 1, low priority
+            vdp.write_control(0x0003);
+            for (int i = 0; i < 64; ++i) vdp.write_data(0x0001);
+            vdp.advance_cycles(Vdp::kM68kCyclesPerLine + 4);
+            const auto& rgb = vdp.frame_pixels();
+            return rgb.size() >= 3 ? static_cast<unsigned>(rgb[0]) : 0u;
+        };
+        const unsigned shadowed = red_at_line0(false);
+        const unsigned under_high = red_at_line0(true);
+        check_value(under_high > shadowed ? 1u : 0u, 1u,
+                    "S/H: a transparent high-priority plane A tile keeps plane B unshadowed");
+    }
+
     // RULES FROM notaz's PD testsuite (issue #17).
     {
         using mercury::genesis::Vdp;

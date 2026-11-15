@@ -2,11 +2,30 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <sstream>
 
 namespace mercury::genesis {
 
 namespace {
+
+// Timer A's counter while a load is waiting for the next sample (see the 0x27
+// write). The counter otherwise only ever holds 0-1023.
+constexpr std::uint16_t kTimerLoadNext = 0xFFFF;
+
+// The timers as notaz's PD testsuite measures them (issue #17: load on start,
+// timer B's divider always running, timer A's first period a sample longer)
+// are OPT-IN: MERCURY_YM_TIMER_HW=1. They shifted the sound timing of 373 of
+// the 694 cartridges in the library sweep - none broke, but that is a lot of
+// music to re-check by ear for two test results, so the default stays as the
+// library was tuned. ym_timer_old() is true unless the switch is set.
+bool ym_timer_old() {
+    static const bool on = [] {
+        const char* e = std::getenv("MERCURY_YM_TIMER_HW");
+        return e == nullptr || e[0] == '0';
+    }();
+    return on;
+}
 
 // The chip works in the logarithmic domain: a sine table of attenuations and an
 // exponential table to get back to linear. Building them once at startup keeps
@@ -272,6 +291,24 @@ void Ym2612::write_register(std::uint8_t bank, std::uint8_t address, std::uint8_
                     ++csm_enable_count_;
                 }
                 ch3_mode_ = static_cast<std::uint8_t>((value >> 6) & 0x03);
+                // STARTING A TIMER LOADS ITS COUNT from the period register;
+                // setting a load bit that is already set does nothing, and a
+                // new period written while it runs waits for the next
+                // overflow. notaz's PD testsuite ("timer b stop", "timer ab
+                // sync", issue #17) stops and restarts timer B and times the
+                // next overflow. Here the count used to carry on from where it
+                // was, so a timer's first period after starting was wrong.
+                // Opt-in: MERCURY_YM_TIMER_HW=1 (see ym_timer_old).
+                // Timer A takes the load on the NEXT sample and counts from
+                // the one after, so its first period is one sample longer than
+                // the rest: with timer B started on its divider's step, an A
+                // period of 15 and a B period of one step overflow on the
+                // same sample ("timer ab sync" reads both flags at once).
+                // kTimerLoadNext marks the pending load; no count reaches it.
+                if (!ym_timer_old()) {
+                    if (!timer_a_enabled_ && (value & 0x01) != 0) timer_a_counter_ = kTimerLoadNext;
+                    if (!timer_b_enabled_ && (value & 0x02) != 0) timer_b_counter_ = timer_b_period_;
+                }
                 timer_a_enabled_ = (value & 0x01) != 0;
                 timer_b_enabled_ = (value & 0x02) != 0;
                 timer_a_flag_enabled_ = (value & 0x04) != 0;
@@ -695,18 +732,32 @@ void Ym2612::advance_cycles(std::uint32_t m68k_cycles) noexcept {
         // Timer A counts up to 1024 from its programmed start value; timer B
         // does the same over 256 but only every sixteenth sample.
         if (timer_a_enabled_) {
-            if (++timer_a_counter_ >= 1024) {
+            if (timer_a_counter_ == kTimerLoadNext) {
+                timer_a_counter_ = timer_a_period_;
+            } else if (++timer_a_counter_ >= 1024) {
                 timer_a_counter_ = timer_a_period_;
                 if (timer_a_flag_enabled_) timer_a_overflow_ = true;
             }
         }
-        if (timer_b_enabled_) {
-            if (++timer_b_prescale_ >= 16) {
-                timer_b_prescale_ = 0;
-                if (++timer_b_counter_ >= 256) {
-                    timer_b_counter_ = timer_b_period_;
-                    if (timer_b_flag_enabled_) timer_b_overflow_ = true;
+        // Timer B's divide-by-16 runs all the time, whether or not the timer
+        // does, so a restarted timer B takes its first step on the next
+        // sixteenth sample, not sixteen samples after the restart (see the
+        // 0x27 write). The old way only counted it while the timer ran.
+        if (ym_timer_old()) {
+            if (timer_b_enabled_) {
+                if (++timer_b_prescale_ >= 16) {
+                    timer_b_prescale_ = 0;
+                    if (++timer_b_counter_ >= 256) {
+                        timer_b_counter_ = timer_b_period_;
+                        if (timer_b_flag_enabled_) timer_b_overflow_ = true;
+                    }
                 }
+            }
+        } else if (++timer_b_prescale_ >= 16) {
+            timer_b_prescale_ = 0;
+            if (timer_b_enabled_ && ++timer_b_counter_ >= 256) {
+                timer_b_counter_ = timer_b_period_;
+                if (timer_b_flag_enabled_) timer_b_overflow_ = true;
             }
         }
 

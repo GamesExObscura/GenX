@@ -126,6 +126,20 @@
   one picks up from there. GenX started every transfer from the same place,
   so every line got the same four colours. Copies inside the video memory
   now carry on the same way.
+- **Shadow and highlight: no more pictures darkened by mistake** (issue #24).
+  In shadow/highlight mode, a pixel stays at full brightness when either
+  background plane's tile there has its priority bit set. That counts even
+  where the tile is see-through, because the bit belongs to the tile. GenX
+  only counted the parts of a tile that were drawn, so things seen through
+  the gaps, such as the low-priority sun sprite in the report, came out too
+  dark. This changes many screens that use the mode:
+  - Brutal: Paws of Fury's name entry is no longer dim all over, and its
+    letter cursor shows again.
+  - The beans in Dr. Robotnik's Mean Bean Machine's wells are no longer dim.
+  - WWF Raw's text boxes are dimmed panels on a normal background again.
+  - Arcus Odyssey, Haunting, Skitchin', Vectorman, Ultimate Mortal Kombat 3,
+    World Cup USA 94, the World Series Baseball games and about 40 others
+    lose dark patches that didn't belong.
 - **QuackShot (Rev A): no more black screen** (issue #11). The 512 KB dump of
   this cartridge stores its two ROM chips back to back. The game expects the
   second chip at a higher address, so loaded as-is it never started. GenX now

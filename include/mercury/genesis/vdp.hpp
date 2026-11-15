@@ -475,6 +475,8 @@ private:
     // VSRAM decodes 64 entries; only the first 40 scroll anything.
     std::array<std::uint16_t, 24> vsram_hidden_{};
     void finish_fill_before_access() noexcept;
+    [[nodiscard]] static bool vint_f_hw() noexcept;
+    [[nodiscard]] static std::int32_t vint_f_delay() noexcept;
     void store_vsram(std::uint32_t address, std::uint16_t value, bool via_dma) noexcept;
     [[nodiscard]] std::uint16_t load_vsram(std::uint32_t address) const noexcept;
     [[nodiscard]] bool vram_128k() const noexcept;

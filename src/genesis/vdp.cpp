@@ -536,7 +536,15 @@ std::uint16_t Vdp::read_control() noexcept {
     if (odd_frame_ && (registers_[kRegModeSet4] & 0x06) != 0) status |= 0x0010;
     if (sprite_collision_) status |= 0x0020;
     if (sprite_overflow_) status |= 0x0040;
-    if (vint_flag_) status |= 0x0080;
+    if (vint_f_hw()) {
+        // MERCURY_VINT_F_HW=1 (see vint_f_hw): F goes up a little after the
+        // blank begins and stays until the CPU acknowledges the interrupt.
+        const bool risen = vint_assert_delay_ == 0 ||
+                           kVintAssertDelayCycles - vint_assert_delay_ >= vint_f_delay();
+        if (vint_flag_ && risen) status |= 0x0080;
+    } else if (vint_flag_) {
+        status |= 0x0080;
+    }
 
     // The sticky flags are cleared by the read that reports them - including
     // the vertical interrupt flag, which is why it is tracked separately from
@@ -544,7 +552,9 @@ std::uint16_t Vdp::read_control() noexcept {
     // interrupt handler ALSO running; if the flag only mirrored the pending
     // interrupt it would be cleared by the acknowledge before the polling loop
     // ever saw it, and the loop would never end.
-    vint_flag_ = false;
+    if (!vint_f_hw()) {
+        vint_flag_ = false;
+    }
     sprite_collision_ = false;
     sprite_overflow_ = false;
     return status;
@@ -1113,6 +1123,9 @@ void Vdp::commit_interrupt_enables() noexcept {
 void Vdp::acknowledge_interrupt() noexcept {
     if (vertical_interrupt_pending_ && (registers_[kRegModeSet2] & 0x20) != 0) {
         vertical_interrupt_pending_ = false;
+        if (vint_f_hw()) {
+            vint_flag_ = false;  // F is retired by the acknowledge, not by reads
+        }
         note_int_event("ACK retired VINT");
         note_raster_event(3, registers_[kRegLineCounter]);
         return;
@@ -1126,6 +1139,29 @@ void Vdp::acknowledge_interrupt() noexcept {
         external_interrupt_pending_ = false;
         note_int_event("ACK retired EXT");
     }
+}
+
+// THE F FLAG AS notaz's PD testsuite MEASURES IT ("irq ack h-v", "irq f flag
+// h40/h32", issue #17): status bit 7 rises a few reads after vertical blanking
+// starts, a moment before the interrupt, and is cleared when the 68000
+// ACKNOWLEDGES the vertical interrupt - reading the status port leaves it
+// alone. GenX clears it on every status read instead, which its library was
+// tuned against (see read_control), so this is opt-in: MERCURY_VINT_F_HW=1,
+// with MERCURY_VINT_F_DELAY=<cycles after the blank> for the rise.
+bool Vdp::vint_f_hw() noexcept {
+    static const bool on = [] {
+        const char* e = std::getenv("MERCURY_VINT_F_HW");
+        return e != nullptr && e[0] != '0';
+    }();
+    return on;
+}
+
+std::int32_t Vdp::vint_f_delay() noexcept {
+    static const std::int32_t delay = [] {
+        const char* e = std::getenv("MERCURY_VINT_F_DELAY");
+        return e != nullptr ? static_cast<std::int32_t>(std::atoi(e)) : std::int32_t{24};
+    }();
+    return delay;
 }
 
 bool Vdp::hblank_timing() const noexcept {
@@ -1799,8 +1835,20 @@ void Vdp::render_line(std::uint32_t line) noexcept {
         int shade = 0;  // -1 darkened, 0 normal, +1 brightened
         bool sprite_is_operator = false;
         if (shadow_highlight) {
+            // A PLANE'S PRIORITY COUNTS EVEN WHERE ITS PIXEL IS TRANSPARENT:
+            // the bit belongs to the tile, and a high-priority tile keeps the
+            // pixel at full brightness whatever shows through it. Issue #24:
+            // a low-priority sun sprite seen through the transparent parts of
+            // high-priority planes A and B came out darkened; it is normal on
+            // a console and in BlastEm. MERCURY_SH_OPAQUE_PRIORITY=1 counts
+            // only opaque plane pixels again, the old way.
+            static const bool opaque_only = [] {
+                const char* e = std::getenv("MERCURY_SH_OPAQUE_PRIORITY");
+                return e != nullptr && e[0] != '0';
+            }();
             const bool background_priority =
-                (a.index != 0 && a.priority) || (b.index != 0 && b.priority);
+                opaque_only ? ((a.index != 0 && a.priority) || (b.index != 0 && b.priority))
+                            : (a.priority || b.priority);
             if (!background_priority) {
                 shade = -1;
             }

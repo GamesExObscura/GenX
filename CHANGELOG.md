@@ -70,6 +70,14 @@
   last line. GenX applied it to that line, which drew it with the wrong sprite
   size. GenX now settles each line's sprites just before the line starts, as
   the console does.
+- **The 1536-colour demo shows all its colours** (issue #22). Charles
+  MacDonald's TEST1536 showed flat bands of the same few colours instead of
+  its smooth gradients. It sends four new colours to the video chip on every
+  line, and tells the chip where to read them from only once per frame. On a
+  real console, the chip remembers where each transfer stopped, so the next
+  one picks up from there. GenX started every transfer from the same place,
+  so every line got the same four colours. Copies inside the video memory
+  now carry on the same way.
 - **QuackShot (Rev A): no more black screen** (issue #11). The 512 KB dump of
   this cartridge stores its two ROM chips back to back. The game expects the
   second chip at a higher address, so loaded as-is it never started. GenX now

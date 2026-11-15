@@ -1,5 +1,6 @@
 // The Mega Drive VDP's V counter, as the 68000 reads it, pinned - and, at the
-// end, when a line takes its horizontal scroll mode (Toy Story, issue #21).
+// end, when a line takes its horizontal scroll mode (Toy Story, issue #21),
+// and where the DMA source registers are left after a transfer (issue #22).
 //
 // Interlace mode 2 reports the line number doubled, with the bit shifted out
 // rotated back in at bit 0. Combat Cars (issue #19) times its two-player
@@ -131,6 +132,73 @@ int main() {
         const auto& rgb = vdp.frame_pixels();
         check_value(rgb.size() >= 3 ? rgb[0] : 0, 0xFF,
                     "row 32 of a 128x64 plane wraps to row 0 (red pixel, not plane B)");
+    }
+
+    // THE DMA SOURCE REGISTERS COUNT ALONG WITH THE TRANSFER. Charles
+    // MacDonald's 1536 colour demo (issue #22) sets R21-R23 once a frame, then
+    // on every line reloads only the length and DMAs four colours into CRAM.
+    // Each DMA must carry on from where the last one stopped; with the
+    // registers left unchanged, every line got the same four colours.
+    {
+        using mercury::genesis::Vdp;
+        Vdp vdp;
+        vdp.reset();
+        static const std::uint16_t colours[8] = {0x002, 0x004, 0x006, 0x008, 0x00A, 0x00C, 0x00E, 0x020};
+        vdp.set_memory_reader([](std::uint32_t address) -> std::uint16_t {
+            const std::uint32_t n = (address - 0x00051E) / 2;
+            return n < 8 ? colours[n] : 0x0EEE;
+        });
+        vdp.write_control(0x8114);  // mode 5, DMA enabled, display off
+        vdp.write_control(0x8F02);  // auto-increment 2
+        vdp.write_control(0x958F);  // source $00051E (word address $00028F)
+        vdp.write_control(0x9602);
+        vdp.write_control(0x9700);
+        vdp.write_control(0x9304);  // four words
+        vdp.write_control(0x9400);
+        vdp.write_control(0xC008);  // CRAM colour 4, DMA
+        vdp.write_control(0x0080);
+        check_value(vdp.cram()[4], 0x002, "first DMA: colour 4 from $00051E");
+        check_value(vdp.cram()[7], 0x008, "first DMA: colour 7 from $000524");
+        check_value(vdp.registers()[0x15], 0x93, "R21 points past the block ($000526)");
+        check_value(vdp.registers()[0x16], 0x02, "R22 points past the block");
+        check_value(vdp.registers()[0x17], 0x00, "R23 is left alone");
+        vdp.write_control(0x9304);  // the next line: only the length is reloaded
+        vdp.write_control(0x9400);
+        vdp.write_control(0xC010);  // CRAM colour 8, DMA
+        vdp.write_control(0x0080);
+        check_value(vdp.cram()[8], 0x00A, "second DMA carries on: colour 8 from $000526");
+        check_value(vdp.cram()[11], 0x020, "second DMA carries on: colour 11 from $00052C");
+    }
+
+    // A VRAM COPY LEAVES ITS SOURCE PAST THE COPIED BYTES TOO.
+    {
+        using mercury::genesis::Vdp;
+        Vdp vdp;
+        vdp.reset();
+        vdp.write_control(0x8114);  // mode 5, DMA enabled
+        vdp.write_control(0x8F02);
+        vdp.write_control(0x5000);  // VRAM write at $1000: AA BB CC DD
+        vdp.write_control(0x0000);
+        vdp.write_data(0xAABB);
+        vdp.write_data(0xCCDD);
+        vdp.write_control(0x8F01);  // auto-increment 1 for the copy
+        vdp.write_control(0x9500);  // copy source $1000
+        vdp.write_control(0x9610);
+        vdp.write_control(0x97C0);  // VRAM copy mode
+        vdp.write_control(0x9302);  // two bytes
+        vdp.write_control(0x9400);
+        vdp.write_control(0x2000);  // destination $2000, copy
+        vdp.write_control(0x00C0);
+        check_value(vdp.vram()[0x2000], 0xAA, "first copy: byte $2000");
+        check_value(vdp.vram()[0x2001], 0xBB, "first copy: byte $2001");
+        check_value(vdp.registers()[0x15], 0x02, "copy source R21 points past the block ($1002)");
+        check_value(vdp.registers()[0x16], 0x10, "copy source R22 points past the block");
+        vdp.write_control(0x9302);  // only the length is reloaded
+        vdp.write_control(0x9400);
+        vdp.write_control(0x2002);  // destination $2002, copy
+        vdp.write_control(0x00C0);
+        check_value(vdp.vram()[0x2002], 0xCC, "second copy carries on: byte $2002");
+        check_value(vdp.vram()[0x2003], 0xDD, "second copy carries on: byte $2003");
     }
 
     std::printf("\n%s\n", failures == 0 ? "all V counter checks passed" : "FAILURES");

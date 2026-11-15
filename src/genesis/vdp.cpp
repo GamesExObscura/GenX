@@ -793,6 +793,15 @@ void Vdp::dma_from_memory() noexcept {
     }
     registers_[kRegDmaLengthLow] = 0;
     registers_[kRegDmaLengthHigh] = 0;
+    // THE SOURCE REGISTERS COUNT ALONG WITH THE TRANSFER, so when it ends they
+    // point just past the last word moved - and a second DMA started without
+    // reloading them carries on from there. Only R21/R22: the pointer wraps
+    // inside its 128KB window, so R23 never changes. Charles MacDonald's 1536
+    // colour demo (issue #22) sets the source once a frame and then DMAs four
+    // colours into CRAM on every line; with the registers left as they were,
+    // every line got the same four and the gradients came out as flat bars.
+    registers_[kRegDmaSourceLow] = static_cast<std::uint8_t>((source >> 1) & 0xFF);
+    registers_[kRegDmaSourceMid] = static_cast<std::uint8_t>((source >> 9) & 0xFF);
     pending_dma_cycles_ += dma_cycles_for(length, wide_mode(), !display_enabled() || vblank_flag_);
 }
 
@@ -837,6 +846,9 @@ void Vdp::dma_copy() noexcept {
     }
     registers_[kRegDmaLengthLow] = 0;
     registers_[kRegDmaLengthHigh] = 0;
+    // Left pointing past the copied block, as a memory DMA leaves them.
+    registers_[kRegDmaSourceLow] = static_cast<std::uint8_t>(source & 0xFF);
+    registers_[kRegDmaSourceMid] = static_cast<std::uint8_t>((source >> 8) & 0xFF);
 }
 
 // --- timing ----------------------------------------------------------------

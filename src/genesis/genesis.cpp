@@ -404,7 +404,13 @@ Genesis::LoadResult Genesis::load_rom(const std::filesystem::path& path) {
                           region.find('U') == std::string::npos &&
                           region.find('J') == std::string::npos &&
                           (region.find('E') != std::string::npos || region.find('A') != std::string::npos);
-    set_pal(pal_only);
+    // A few European cartridges list every region in the header but refuse a
+    // 60Hz console in code (needs_pal_console). The image's own checksum is
+    // only worked out for a header that carries none, the one case that needs
+    // it.
+    const std::uint16_t computed =
+        cartridge_.header().checksum == 0 ? cartridge_.compute_checksum() : cartridge_.header().checksum;
+    set_pal(pal_only || needs_pal_console(cartridge_.header(), computed));
     // The adapter's own firmware, if it is on disk near the cartridge. Found
     // before the reset so the processors come out of it into real code rather
     // than into the synthesised stand-in. Absent, everything carries on as

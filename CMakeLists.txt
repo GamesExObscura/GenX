@@ -344,6 +344,14 @@ target_link_libraries(t5740_tests PRIVATE mercury)
 
 add_test(NAME t5740_tests COMMAND t5740_tests)
 
+add_executable(region_quirk_tests
+    src/tests/region_quirk_tests.cpp
+)
+
+target_link_libraries(region_quirk_tests PRIVATE mercury)
+
+add_test(NAME region_quirk_tests COMMAND region_quirk_tests)
+
 add_executable(sms_peripheral_tests
     src/tests/sms_peripheral_tests.cpp
 )

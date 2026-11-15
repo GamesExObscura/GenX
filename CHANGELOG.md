@@ -159,6 +159,17 @@
   - Arcus Odyssey, Haunting, Skitchin', Vectorman, Ultimate Mortal Kombat 3,
     World Cup USA 94, the World Series Baseball games and about 40 others
     lose dark patches that didn't belong.
+- **Back to the Future Part III (Europe) for the Mega Drive now starts**
+  (issue #12). It stayed on a black screen. The cartridge's header says it
+  runs in every region, but the game checks for a European 50Hz console
+  and stops if it doesn't find one. GenX picked a US console from the
+  header. It now runs this cartridge on a European one, where it boots
+  and plays. The USA cartridge is unchanged.
+  - Six more European cartridges are known to do the same, and now also
+    get a European console: Alisia Dragoon, Brian Lara Cricket, Williams
+    Arcade's Greatest Hits, Wiz 'n' Liz, Muhammad Ali Heavyweight Boxing,
+    and Radica's Sensible Soccer Plus edition. These six come from Genesis
+    Plus GX's list and haven't been tried in GenX.
 - **QuackShot (Rev A): no more black screen** (issue #11). The 512 KB dump of
   this cartridge stores its two ROM chips back to back. The game expects the
   second chip at a higher address, so loaded as-is it never started. GenX now

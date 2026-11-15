@@ -113,6 +113,12 @@ struct GameQuirks {
 // domestic title when a serial is missing or shared across a series.
 [[nodiscard]] GameQuirks quirks_for(const RomHeader& header) noexcept;
 
+// European cartridges whose header lists other regions too but which refuse a
+// 60Hz console in code (issue #12): run them on a European (PAL) machine.
+// `computed_checksum` is the image's own sum, needed for one cartridge whose
+// header carries neither a serial nor a checksum.
+[[nodiscard]] bool needs_pal_console(const RomHeader& header, std::uint16_t computed_checksum) noexcept;
+
 }  // namespace mercury::genesis
 
 

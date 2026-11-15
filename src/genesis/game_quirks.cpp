@@ -160,7 +160,55 @@ constexpr std::array<QuirkEntry, 7> kTable{{
                                .sram_start = 0x200000, .sram_end = 0x20FFFF}},
 }};
 
+// EUROPEAN CARTRIDGES THAT REFUSE A 60Hz CONSOLE (issue #12). Each header lists
+// more regions than the game accepts, so the header alone picks a US machine.
+// Matched as a part of the squeezed serial, because the "GM " prefix and the
+// spacing vary between dumps. A checksum of -1 is not checked.
+struct EuropeOnlyEntry {
+    std::string_view serial_part;  // squeezed form; empty = no serial check
+    int header_checksum;
+    int computed_checksum;
+};
+constexpr std::array<EuropeOnlyEntry, 7> kEuropeOnly{{
+    // Back to the Future Part III (Europe), "GM T-69046-50". VERIFIED: the
+    // header says "JUE", but at $000312 the game tests bit 6 of the version
+    // register ($A10001, set on a 50Hz console) and, if it is clear, branches to
+    // $000904: display off, then a branch to itself at $000918 - a black screen
+    // for good on a US machine. On a European one it boots and plays. The USA
+    // cartridge ("GM T-69046-00") has no such check and is not matched.
+    {"T6904650", -1, -1},
+
+    // The rest are Genesis Plus GX's list of cartridges it forces to Europe,
+    // added at the user's request without the ROMs to test (2026-11-15).
+    // Alisia Dragoon (Europe): the USA cartridge has the same serial
+    // ("GM T-45033 -00", checksum 95AA), so only the European checksum counts.
+    {"T45033", 0x0F81, -1},
+    {"T12010600", -1, -1},  // Brian Lara Cricket
+    {"T9712650", -1, -1},   // Williams Arcade's Greatest Hits (Europe)
+    {"T11302650", -1, -1},  // Wiz 'n' Liz - The Frantic Wabbit Wescue (Europe)
+    {"T7009600", -1, -1},   // Muhammad Ali Heavyweight Boxing (Europe)
+    // Radica's Sensible Soccer Plus edition: no serial, header checksum 0,
+    // recognised by the image's own sum.
+    {"", 0x0000, 0x1F7F},
+}};
+
 }  // namespace
+
+bool needs_pal_console(const RomHeader& header, std::uint16_t computed_checksum) noexcept {
+    const std::string serial = squeeze(header.serial);
+    return std::any_of(kEuropeOnly.begin(), kEuropeOnly.end(), [&](const EuropeOnlyEntry& entry) {
+        if (!entry.serial_part.empty() && serial.find(entry.serial_part) == std::string::npos) {
+            return false;
+        }
+        if (entry.header_checksum >= 0 && header.checksum != entry.header_checksum) {
+            return false;
+        }
+        if (entry.computed_checksum >= 0 && computed_checksum != entry.computed_checksum) {
+            return false;
+        }
+        return true;
+    });
+}
 
 GameQuirks quirks_for(const RomHeader& header) noexcept {
     const std::string serial = squeeze(header.serial);

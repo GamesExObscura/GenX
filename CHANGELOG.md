@@ -70,6 +70,24 @@
   last line. GenX applied it to that line, which drew it with the wrong sprite
   size. GenX now settles each line's sprites just before the line starts, as
   the console does.
+- **Master System timing now matches the console in FluBBa's VDP Test**
+  (issue #3). The test's timing page now passes in full:
+  - The H counter (port $7F) keeps its value until something latches it.
+  - Writing port $3F latches it, as on a console.
+  - It counts in the console's exact pattern.
+  - The line interrupt, the line counter's change and the frame-interrupt flag
+    land at the same points in the line as on a console.
+
+  A horizontal scroll change made in the last moments of a line now takes
+  effect a line later, as on a console, so the test's scroll column is
+  straight. Three of the test's sprite checks still differ:
+  - Two are quirks of the first-model Master System.
+  - The third, the exact moment of the collision flag, needs GenX to draw each
+    line later in the line than it does now. Fantastic Dizzy's status bar
+    relies on the two matching.
+
+  The test's Game Gear and Mega Drive pages check those consoles, not a Master
+  System. Game Gear games are unchanged.
 - **The 1536-colour demo shows all its colours** (issue #22). Charles
   MacDonald's TEST1536 showed flat bands of the same few colours instead of
   its smooth gradients. It sends four new colours to the video chip on every

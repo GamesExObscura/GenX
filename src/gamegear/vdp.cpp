@@ -1,6 +1,7 @@
 #include "mercury/gamegear/vdp.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -499,6 +500,8 @@ void render_sprite_overlay(
 struct SpriteScanlineFlags {
     bool collision = false;
     bool overflow = false;
+    // The leftmost display column two sprites collided on.
+    int collision_x = 0x7FFF;
 };
 
 SpriteScanlineFlags render_sprite_scanline(
@@ -611,6 +614,7 @@ SpriteScanlineFlags render_sprite_scanline(
             if (screen_x >= 0 && screen_x < static_cast<int>(kMapWidthPixels)) {
                 if (occupied[static_cast<std::size_t>(screen_x)]) {
                     flags.collision = true;
+                    flags.collision_x = std::min(flags.collision_x, screen_x);
                 }
                 occupied[static_cast<std::size_t>(screen_x)] = true;
             }
@@ -894,6 +898,9 @@ void Vdp::reset() noexcept {
     h_counter_ = compute_h_counter(cycles_into_scanline_);
     latch_sprite_registers();
     clear_h_latch();
+    collision_due_cycle_ = -1;
+    hscroll_source_ = registers_[8];
+    hscroll_deferred_ = -1;
 }
 
 void Vdp::latch_sprite_registers() noexcept {
@@ -923,6 +930,12 @@ void Vdp::sanitize_loaded() noexcept {
         frame_interrupt_assert_delay_cycles_ = 0;
     }
     address_ &= 0x3FFF;
+    if (collision_due_cycle_ < -1 || collision_due_cycle_ >= static_cast<std::int32_t>(kCpuCyclesPerScanline)) {
+        collision_due_cycle_ = -1;
+    }
+    if (hscroll_deferred_ < -1 || hscroll_deferred_ > 0xFF) {
+        hscroll_deferred_ = -1;
+    }
 }
 
 void Vdp::advance_cycles(std::uint32_t cpu_cycles) noexcept {
@@ -941,6 +954,12 @@ void Vdp::advance_cycles(std::uint32_t cpu_cycles) noexcept {
     }
 
     while (cycles_into_scanline_ >= kCpuCyclesPerScanline) {
+        // A collision still waiting for the beam: the line is over, so it got
+        // there.
+        if (collision_due_cycle_ >= 0) {
+            status_ |= 0x20;
+            collision_due_cycle_ = -1;
+        }
         cycles_into_scanline_ -= kCpuCyclesPerScanline;
         scanline_ = (scanline_ + 1) % kScanlinesPerFrame;
         set_v_counter_from_scanline();
@@ -952,7 +971,14 @@ void Vdp::advance_cycles(std::uint32_t cpu_cycles) noexcept {
         const auto area_start = active_area_start(registers_);
         const auto area_lines = active_display_lines(registers_);
         if (scanline_ >= area_start && scanline_ < area_start + area_lines) {
-            horizontal_scroll_latch_[scanline_ - area_start] = registers_[8];
+            horizontal_scroll_latch_[scanline_ - area_start] =
+                mode_ == DisplayMode::master_system ? hscroll_source_ : registers_[8];
+        }
+        // An R8 write that reached the VDP after the latch (see write_control)
+        // counts from the next line on.
+        if (hscroll_deferred_ >= 0) {
+            hscroll_source_ = static_cast<std::uint8_t>(hscroll_deferred_);
+            hscroll_deferred_ = -1;
         }
 
         const auto viewport_start =
@@ -986,8 +1012,36 @@ void Vdp::advance_cycles(std::uint32_t cpu_cycles) noexcept {
                     mode_);
                 // Both bits latch until the CPU reads the status port, so they
                 // accumulate across the frame rather than tracking one line.
+                //
+                // ON A CONSOLE THE COLLISION FLAG GOES UP WHEN THE BEAM REACHES
+                // THE PIXEL, not when the line begins. FluBBa's VDP Test (issue
+                // #3) reads the status port a cycle apart around a collision
+                // at column $83 and wants the flag clear on the first read and
+                // set on the second: cycle 111 of the line in this core's
+                // timebase, two-thirds of a cycle per pixel either side.
+                //
+                // BUT IT STAYS AT THE LINE START HERE, because this core draws
+                // a whole line at its first cycle, about 24 cycles before a
+                // console puts out the line's first pixel, and a game that
+                // races the beam off the flag needs the two to agree. Fantastic
+                // Dizzy (SMS) parks two sprites at column 222 on line 30, polls
+                // for the collision, then turns the display off to change the
+                // palette under the status bar. On a console the "off" lands in
+                // the first cycles of line 31, before its pixels, so line 31 is
+                // black; with the flag at the pixel here, line 31 was already
+                // drawn and showed the status bar instead. MERCURY_SMS_COL_AT_
+                // PIXEL=1 turns the beam-accurate flag on (and passes that VDP
+                // Test check); it wants the line drawn later to go with it.
                 if (sprite_flags.collision) {
-                    status_ |= 0x20;
+                    if (mode_ == DisplayMode::master_system && sms_collision_at_pixel()) {
+                        const int base = sms_collision_cycle_base();
+                        const int offset = sprite_flags.collision_x - 0x83;
+                        const int cycle = base + (offset >= 0 ? offset * 2 / 3 : -((-offset * 2 + 2) / 3));
+                        collision_due_cycle_ =
+                            std::clamp(cycle, 0, static_cast<int>(kCpuCyclesPerScanline) - 1);
+                    } else {
+                        status_ |= 0x20;
+                    }
                 }
                 if (sprite_flags.overflow) {
                     status_ |= 0x40;
@@ -1042,6 +1096,43 @@ void Vdp::advance_cycles(std::uint32_t cpu_cycles) noexcept {
     }
 
     h_counter_ = compute_h_counter(cycles_into_scanline_);
+    if (collision_due_cycle_ >= 0 && cycles_into_scanline_ >= static_cast<std::uint32_t>(collision_due_cycle_)) {
+        status_ |= 0x20;
+        collision_due_cycle_ = -1;
+    }
+}
+
+namespace {
+std::uint32_t phase_from_env(const char* name, std::uint32_t fallback) {
+    const char* e = std::getenv(name);
+    return e != nullptr ? static_cast<std::uint32_t>(std::atoi(e)) : fallback;
+}
+}  // namespace
+
+std::uint32_t Vdp::sms_io_read_phase() noexcept {
+    static const std::uint32_t phase = phase_from_env("MERCURY_SMS_IN_PHASE", kSmsIoPhaseCycles);
+    return phase;
+}
+
+std::uint32_t Vdp::sms_io_write_phase() noexcept {
+    static const std::uint32_t phase = phase_from_env("MERCURY_SMS_OUT_PHASE", kSmsIoPhaseCycles);
+    return phase;
+}
+
+bool Vdp::sms_collision_at_pixel() noexcept {
+    static const bool on = [] {
+        const char* e = std::getenv("MERCURY_SMS_COL_AT_PIXEL");
+        return e != nullptr && e[0] != '0';
+    }();
+    return on;
+}
+
+int Vdp::sms_collision_cycle_base() noexcept {
+    static const int base = [] {
+        const char* e = std::getenv("MERCURY_SMS_COL_BASE");
+        return e != nullptr ? std::atoi(e) : kSmsCollisionCycle;
+    }();
+    return base;
 }
 
 std::uint8_t Vdp::read_v_counter() const noexcept {
@@ -1049,7 +1140,42 @@ std::uint8_t Vdp::read_v_counter() const noexcept {
 }
 
 std::uint8_t Vdp::read_h_counter() const noexcept {
+    if (mode_ == DisplayMode::master_system && !sms_h_counter_live()) {
+        return h_latch_;
+    }
     return h_latch_valid_ ? h_latch_ : h_counter_;
+}
+
+// THE MASTER SYSTEM'S H COUNTER, CYCLE BY CYCLE. It counts 342 pixels a line
+// in steps of two, 171 counts in 228 CPU cycles: $00-$93, then $E9-$FF. Three
+// counts every four cycles, so one count in three lasts two cycles - and which
+// ones is fixed: FluBBa's VDP Test (issue #3) samples the counter one cycle
+// later on each pass and checks every value against a table measured on a
+// console, where the counts that last two cycles are $02, $05, $08 ... $FF.
+// That is (3 * i + 2) / 4 for cycle i of that table.
+//
+// Where the table starts within this core's line comes from the same test's
+// timing checks: the V counter changes at H count $F4, so cycle 0 here, where
+// the line begins, is $F4 (kSmsHCounterPhase). MERCURY_SMS_HC_PHASE overrides
+// it, for measuring.
+std::uint8_t Vdp::sms_h_counter_in(std::uint32_t cycles_ahead) const noexcept {
+    static const std::uint32_t phase = [] {
+        const char* e = std::getenv("MERCURY_SMS_HC_PHASE");
+        return e != nullptr ? static_cast<std::uint32_t>(std::atoi(e)) % kCpuCyclesPerScanline : kSmsHCounterPhase;
+    }();
+    const std::uint32_t cycle = (cycles_into_scanline_ + cycles_ahead + phase) % kCpuCyclesPerScanline;
+    const std::uint32_t count = (3 * cycle + 2) / 4;  // 0..170
+    return static_cast<std::uint8_t>(count < 0x94 ? count : 0xE9 + (count - 0x94));
+}
+
+// MERCURY_SMS_HC_LIVE=1: the old behaviour, $7F reads the live counter in
+// Master System mode too, for A/B sweeps.
+bool Vdp::sms_h_counter_live() noexcept {
+    static const bool live = [] {
+        const char* e = std::getenv("MERCURY_SMS_HC_LIVE");
+        return e != nullptr && e[0] != '0';
+    }();
+    return live;
 }
 
 std::uint8_t Vdp::read_data() noexcept {
@@ -1145,6 +1271,25 @@ void Vdp::write_control(std::uint8_t value) noexcept {
             ++register_write_count_;
             last_register_index_ = static_cast<std::uint8_t>(register_index);
             last_register_value_ = control_first_byte_;
+            // THE HORIZONTAL SCROLL FOR A LINE IS TAKEN AT H COUNT $F3, a
+            // cycle and a half before the line begins (cycles 226-227 of the
+            // line above here). This core applies an OUT at the start of the
+            // instruction, but the VDP gets it at the instruction's I/O cycle,
+            // 11 cycles in (Vdp::sms_io_write_phase), so a write made in the
+            // last few cycles of a line arrives after the next line's latch
+            // and counts from the line after it. FluBBa's VDP Test (issue #3) writes R8 one
+            // cycle either side of the latch and expects only the earlier
+            // write to count; applied at once, the later one shifted a whole
+            // line of its test column 128 pixels. Master System mode only.
+            if (register_index == 8) {
+                const auto arrives = cycles_into_scanline_ + sms_io_write_phase();
+                if (mode_ != DisplayMode::master_system || arrives < kSmsHScrollLatchCycle) {
+                    hscroll_source_ = control_first_byte_;
+                    hscroll_deferred_ = -1;
+                } else {
+                    hscroll_deferred_ = control_first_byte_;
+                }
+            }
             // R10 is only the RELOAD value for the line counter, never the
             // counter itself. The live counter keeps counting down and takes
             // the new value at its next underflow (or from the continuous
@@ -1204,8 +1349,23 @@ bool Vdp::interrupt_requested() const noexcept {
     const bool frame_irq_asserted =
         frame_flag_set && frame_interrupt_enabled() &&
         frame_interrupt_assert_delay_cycles_ == 0;
+    // THE LINE INTERRUPT COMES A CYCLE AFTER THE FRAME INTERRUPT on a Master
+    // System: FluBBa's VDP Test (issue #3) measures the two a pixel apart,
+    // and its line interrupt timing only matches with the line one
+    // held back a cycle into the line. An instruction that ends right at the
+    // line start therefore doesn't see it; the next one does.
+    const bool line_irq_held =
+        mode_ == DisplayMode::master_system && cycles_into_scanline_ < sms_line_interrupt_delay();
     return frame_irq_asserted ||
-           (line_interrupt_pending_ && line_interrupt_enabled());
+           (line_interrupt_pending_ && line_interrupt_enabled() && !line_irq_held);
+}
+
+std::uint32_t Vdp::sms_line_interrupt_delay() noexcept {
+    static const std::uint32_t delay = [] {
+        const char* e = std::getenv("MERCURY_SMS_LINE_IRQ_DELAY");
+        return e != nullptr ? static_cast<std::uint32_t>(std::atoi(e)) : kSmsLineInterruptDelayCycles;
+    }();
+    return delay;
 }
 
 std::string Vdp::describe() const {

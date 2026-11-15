@@ -72,7 +72,10 @@ private:
     // line), appended after the EEPROM for the same reason.
     // 6: the Master System controller port's I/O control register, paddle
     // flip-flop and the VDP's H counter latch (Light Phaser), appended again.
-    static constexpr std::uint32_t kStateVersion = 6;
+    // 7: Master System mode's horizontal scroll for the next line (a late R8
+    // write waits a line), and a sprite collision drawn but not yet flagged
+    // (only with MERCURY_SMS_COL_AT_PIXEL=1).
+    static constexpr std::uint32_t kStateVersion = 7;
 
     template <typename Archive>
     void visit_state(Archive& ar, std::uint32_t version = kStateVersion) {
@@ -99,6 +102,14 @@ private:
         } else if constexpr (Archive::loading()) {
             system_control_.reset_peripheral_state();
             vdp_.clear_h_latch();
+        }
+        if (version >= 7) {
+            vdp_.visit_collision_state(ar);
+            if constexpr (Archive::loading()) {
+                vdp_.sanitize_loaded();
+            }
+        } else if constexpr (Archive::loading()) {
+            vdp_.clear_pending_collision();
         }
     }
 

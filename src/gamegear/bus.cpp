@@ -1,6 +1,7 @@
 #include "mercury/gamegear/bus.hpp"
 
 #include <sstream>
+#include <utility>
 
 #include "mercury/gamegear/cartridge.hpp"
 #include "mercury/gamegear/psg.hpp"
@@ -30,6 +31,17 @@ constexpr std::uint32_t kVdpActiveDisplayWaitCycles = 0;
 // lets a status-port poll observe a VDP flag that flips part-way through the
 // instruction instead of always losing to the interrupt.
 constexpr std::uint32_t kIoReadPhaseCycles = 7;
+
+// IN MASTER SYSTEM MODE, BOTH ARE 11 (Vdp::kSmsIoPhaseCycles): the I/O
+// cycle's data is taken at its end, where the Z80 samples it (the falling edge
+// of its last T-state) - 11 T-states into IN A,(n) and OUT (n),A. FluBBa's VDP
+// Test (issue #3) pins this: it latches the H counter with OUT and reads the V
+// counter and the status port with IN, and its timing checks only all pass
+// with both at the end of the instruction (with the counter phase in
+// Vdp::sms_h_counter_in). Game Gear mode keeps 7 for reads, which its library
+// was tuned against. Writes are still applied at the start of the
+// instruction; the write phase places an H counter latch made by a write, and
+// decides which line a horizontal scroll write reaches (Vdp::write_control).
 
 }  // namespace
 
@@ -166,7 +178,30 @@ void GameGearBus::out(std::uint8_t port, std::uint8_t value) noexcept {
             // The Master System's I/O control: TH/TR direction and level for
             // both controller ports. A paddle reads TH from it, and a Light
             // Phaser only works while its TH is an input.
-            system_control_->write_io_control(value);
+            //
+            // TH GOING HIGH LATCHES THE H COUNTER, from either port, and the
+            // console's own pins count: a TH set as an output and driven low,
+            // then turned into an input (it floats high) or driven high, makes
+            // the edge. Programs time things this way - FluBBa's VDP Test
+            // (issue #3) measures every one of its interrupt and flag timings
+            // by flipping $3F from $55 to $FF and reading $7F. The value is the
+            // counter at the OUT's I/O cycle, not where the instruction began.
+            {
+                const auto th_levels = [](std::uint8_t control) {
+                    // Bit 1/3: TH direction (1 = input, pulled high); bit 5/7:
+                    // the level it drives as an output.
+                    const bool a = (control & 0x02) != 0 || (control & 0x20) != 0;
+                    const bool b = (control & 0x08) != 0 || (control & 0x80) != 0;
+                    return std::pair<bool, bool>{a, b};
+                };
+                const auto before = th_levels(system_control_->io_control());
+                system_control_->write_io_control(value);
+                const auto after = th_levels(value);
+                if (vdp_->display_mode() == Vdp::DisplayMode::master_system &&
+                    ((!before.first && after.first) || (!before.second && after.second))) {
+                    vdp_->latch_h_counter(vdp_->sms_h_counter_in(Vdp::sms_io_write_phase()));
+                }
+            }
             break;
         default:
             break;
@@ -188,7 +223,11 @@ mercury::core::Z80BusCallbacks GameGearBus::make_z80_callbacks() noexcept {
     callbacks.in = [this](std::uint8_t port) { return in(port); };
     callbacks.out = [this](std::uint8_t port, std::uint8_t value) { out(port, value); };
     callbacks.io_wait_cycles = [this](std::uint8_t port, bool is_write) { return io_wait_cycles(port, is_write); };
-    callbacks.io_read_phase_cycles = []() { return kIoReadPhaseCycles; };
+    callbacks.io_read_phase_cycles = [this]() {
+        return vdp_ != nullptr && vdp_->display_mode() == Vdp::DisplayMode::master_system
+                   ? Vdp::sms_io_read_phase()
+                   : kIoReadPhaseCycles;
+    };
     callbacks.advance_io_timing = [this](std::uint32_t cycles) {
         if (vdp_ != nullptr) {
             vdp_->advance_cycles(cycles);

@@ -55,11 +55,39 @@ public:
     void advance_cycles(std::uint32_t cpu_cycles) noexcept;
     [[nodiscard]] std::uint8_t read_v_counter() const noexcept;
     // Port $7F. The H counter as a latch: it holds the value taken on the
-    // last TH edge from a controller port - a Light Phaser's sensor. Until a
-    // gun has latched anything it reads the live counter, as it always has
-    // here, so no other game sees a difference.
+    // last TH edge from a controller port - a Light Phaser's sensor, or the
+    // console's own port $3F. In Master System mode that is all it ever
+    // returns, as on the console. In Game Gear mode, until a gun has latched
+    // anything, it reads the live counter, as it always has here.
     [[nodiscard]] std::uint8_t read_h_counter() const noexcept;
+    // The beam position the Light Phaser's sensor is tested against.
     [[nodiscard]] std::uint8_t live_h_counter() const noexcept { return h_counter_; }
+    // The value the Master System's H counter has the given number of CPU
+    // cycles from now - the value a TH edge latches. See vdp.cpp.
+    [[nodiscard]] std::uint8_t sms_h_counter_in(std::uint32_t cycles_ahead) const noexcept;
+    [[nodiscard]] static bool sms_h_counter_live() noexcept;
+    // Cycle of the counter's table (see sms_h_counter_in) at this core's line
+    // start: (3 * 212 + 2) / 4 = 159, the count shown as $F4.
+    static constexpr std::uint32_t kSmsHCounterPhase = 212;
+    // Master System mode only: the line interrupt is seen this many cycles
+    // into the line (see interrupt_requested). MERCURY_SMS_LINE_IRQ_DELAY.
+    static constexpr std::uint32_t kSmsLineInterruptDelayCycles = 1;
+    [[nodiscard]] static std::uint32_t sms_line_interrupt_delay() noexcept;
+    // Master System mode, with MERCURY_SMS_COL_AT_PIXEL=1 only (off by
+    // default - see advance_cycles): the cycle of the line at which a sprite
+    // collision at display column $83 is flagged. MERCURY_SMS_COL_BASE.
+    static constexpr int kSmsCollisionCycle = 111;
+    [[nodiscard]] static int sms_collision_cycle_base() noexcept;
+    [[nodiscard]] static bool sms_collision_at_pixel() noexcept;
+    // Master System mode: where in an I/O instruction the device takes its
+    // data - 11 cycles in, for reads and writes alike (see bus.cpp). The
+    // MERCURY_SMS_IN_PHASE / MERCURY_SMS_OUT_PHASE overrides are for measuring.
+    static constexpr std::uint32_t kSmsIoPhaseCycles = 11;
+    [[nodiscard]] static std::uint32_t sms_io_read_phase() noexcept;
+    [[nodiscard]] static std::uint32_t sms_io_write_phase() noexcept;
+    // Master System mode: an R8 write that reaches the VDP at this cycle of a
+    // line or later misses the next line's latch (see write_control).
+    static constexpr std::uint32_t kSmsHScrollLatchCycle = 227;
     void latch_h_counter(std::uint8_t value) noexcept {
         h_latch_ = value;
         h_latch_valid_ = true;
@@ -191,6 +219,20 @@ private:
         h_latch_ = 0;
         h_latch_valid_ = false;
     }
+    // Version 7 appends a sprite collision found on this line but not yet
+    // flagged, because the beam hasn't reached it, and the horizontal scroll
+    // the next line will take (Master System mode).
+    template <typename Archive>
+    void visit_collision_state(Archive& ar) {
+        ar(collision_due_cycle_);
+        ar(hscroll_source_);
+        ar(hscroll_deferred_);
+    }
+    void clear_pending_collision() noexcept {
+        collision_due_cycle_ = -1;
+        hscroll_source_ = registers_[8];
+        hscroll_deferred_ = -1;
+    }
 
     // A loaded state can come from someone else (netplay, a shared file).
     // Values the hardware could never hold are brought back into range, so
@@ -236,6 +278,13 @@ private:
     std::uint32_t sprite_latch_cycle_ = kSpriteLatchCycle;
     std::uint8_t h_latch_ = 0;
     bool h_latch_valid_ = false;
+    // Master System mode: the cycle of this line at which a sprite collision
+    // drawn on it sets status bit 5, or -1 for none (see advance_cycles).
+    std::int32_t collision_due_cycle_ = -1;
+    // Master System mode: the R8 value the next line's horizontal scroll latch
+    // takes, and a write that arrived too late for it (-1 for none).
+    std::uint8_t hscroll_source_ = 0;
+    std::int16_t hscroll_deferred_ = -1;
     std::uint32_t status_read_count_ = 0;
     std::uint32_t data_read_count_ = 0;
     std::uint32_t control_write_count_ = 0;

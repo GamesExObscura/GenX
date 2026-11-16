@@ -36,6 +36,8 @@ public:
     static constexpr std::size_t kVirtualTileHeight = 28;
     static constexpr std::uint32_t kCpuCyclesPerScanline = 228;
     static constexpr std::uint32_t kScanlinesPerFrame = 262;
+    // A European (PAL, 50Hz) Master System: same lines, 313 to a frame.
+    static constexpr std::uint32_t kScanlinesPerFramePal = 313;
     static constexpr std::uint32_t kVisibleScanlines = 192;
     // Cycle within a line at which the sprite settings for the next line are
     // latched - see the comment above its static_assert in vdp.cpp.
@@ -45,6 +47,14 @@ public:
     // Must be set before reset() so the frame buffer is sized correctly.
     void set_display_mode(DisplayMode mode) noexcept;
     [[nodiscard]] DisplayMode display_mode() const noexcept { return mode_; }
+    // A European console (issue #12): 313 lines a frame and the PAL V counter
+    // sequence. Only ever set for a Master System cartridge that needs it; it
+    // survives reset(), like the display mode.
+    void set_pal(bool pal) noexcept { pal_ = pal; }
+    [[nodiscard]] bool pal() const noexcept { return pal_; }
+    [[nodiscard]] std::uint32_t scanlines_per_frame() const noexcept {
+        return pal_ ? kScanlinesPerFramePal : kScanlinesPerFrame;
+    }
     [[nodiscard]] std::size_t visible_width() const noexcept {
         return mode_ == DisplayMode::master_system ? kMasterSystemWidth : kVisibleWidth;
     }
@@ -246,6 +256,7 @@ private:
     std::array<std::uint8_t, kVramSize / 8> vram_written_{};
     std::array<std::uint8_t, kColorRamWordCount * 2> cram_{};
     DisplayMode mode_ = DisplayMode::game_gear;
+    bool pal_ = false;
     std::array<std::uint8_t, 16> registers_{};
     std::uint8_t v_counter_ = 0xB0;
     std::uint8_t h_counter_ = 0x00;

@@ -159,17 +159,31 @@
   - Arcus Odyssey, Haunting, Skitchin', Vectorman, Ultimate Mortal Kombat 3,
     World Cup USA 94, the World Series Baseball games and about 40 others
     lose dark patches that didn't belong.
-- **Back to the Future Part III (Europe) for the Mega Drive now starts**
-  (issue #12). It stayed on a black screen. The cartridge's header says it
-  runs in every region, but the game checks for a European 50Hz console
-  and stops if it doesn't find one. GenX picked a US console from the
-  header. It now runs this cartridge on a European one, where it boots
-  and plays. The USA cartridge is unchanged.
-  - Six more European cartridges are known to do the same, and now also
-    get a European console: Alisia Dragoon, Brian Lara Cricket, Williams
-    Arcade's Greatest Hits, Wiz 'n' Liz, Muhammad Ali Heavyweight Boxing,
-    and Radica's Sensible Soccer Plus edition. These six come from Genesis
-    Plus GX's list and haven't been tried in GenX.
+- **Back to the Future Part III (Europe) now starts, on the Master System
+  and the Mega Drive** (issue #12). Both stayed on a black screen. Both
+  versions check for a European 50Hz console and stop if they don't find
+  one, and GenX gave them a 60Hz one.
+  - **Master System:** GenX can now be a European 50Hz Master System,
+    with the 313-line frame and the counter values that go with it. The
+    game shows its Image Works logo and title, and plays.
+  - **Mega Drive:** the cartridge's header says it runs in every region,
+    so GenX picked a US console. It now gets a European one. The USA
+    cartridge is unchanged.
+  - **Other European games known to need the same now get it too:**
+    - Mega Drive: Alisia Dragoon, Brian Lara Cricket, Williams Arcade's
+      Greatest Hits, Wiz 'n' Liz, Muhammad Ali Heavyweight Boxing, and
+      Radica's Sensible Soccer Plus edition.
+    - Master System: The Addams Family, Bram Stoker's Dracula, California
+      Games II, Home Alone, Power Strike II, Predator 2, RoboCop 3,
+      Sensible Soccer, Shadow of the Beast, Sonic the Hedgehog 2, Space
+      Harrier (50Hz version), Taito Chase H.Q., and several Brazilian
+      releases.
+    - These come from Genesis Plus GX's lists and haven't been tried in
+      GenX.
+- **50Hz games no longer run 20% fast.** GenX showed every game at 60
+  frames a second, including the ones running on a European 50Hz
+  console: Fantastic Dizzy, European Mega Drive and Sega CD games, and
+  the games above. They ran a fifth too fast. They now run at 50.
 - **QuackShot (Rev A): no more black screen** (issue #11). The 512 KB dump of
   this cartridge stores its two ROM chips back to back. The game expects the
   second chip at a higher address, so loaded as-is it never started. GenX now

@@ -910,6 +910,22 @@ constexpr auto kFrameDuration = std::chrono::duration<double>(
      static_cast<double>(Vdp::kScanlinesPerFrame)) /
     mercury::gamegear::Psg::kBaseClockHz);
 
+// THE WALL TIME OF ONE EMULATED FRAME, by the console that is running. A 50Hz
+// (PAL) frame is 313 lines, not 262. Every tick used to wait one 60Hz frame
+// whatever ran, so a PAL game - Fantastic Dizzy, Back to the Future III
+// (Europe) - played 20% fast (measured: 59.8 frames a second, tests\
+// fps_check.ps1). The lines are timed at the NTSC rate, the same clock the
+// sound chips' output is converted to 44.1kHz by, so the audio still fills
+// the device exactly: 50.2 frames a second, against a real PAL console's 49.7.
+std::chrono::duration<double> frame_duration(const RuntimeState& state) {
+    const bool pal = state.machine == Machine::genesis ? state.genesis.pal() : state.game_gear.vdp().pal();
+    if (!pal) {
+        return kFrameDuration;
+    }
+    return kFrameDuration * (static_cast<double>(Vdp::kScanlinesPerFramePal) /
+                             static_cast<double>(Vdp::kScanlinesPerFrame));
+}
+
 int window_scale(const RuntimeState& state) {
     return state.machine == Machine::genesis ? kGenesisWindowScale : kWindowScale;
 }
@@ -3420,6 +3436,8 @@ void write_diagnostic_log(RuntimeState& state) {
     if (state.machine != Machine::genesis) {
         const auto& gg = state.game_gear;
         out << "-- Game Gear ------------------------------------------------\n";
+        out << "frames drawn    : " << gg.vdp().frames_elapsed()
+            << (gg.vdp().pal() ? "  (European 50Hz console)" : "") << "\n";
         out << gg.describe() << "\n";
         out << "PSG: " << gg.psg().describe() << "\n";
         out << gg.psg().activity_summary() << "\n";
@@ -12656,10 +12674,10 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
                     }
                     state->next_frame_deadline +=
                         std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                            kFrameDuration);
+                            frame_duration(*state));
                     const auto limit =
                         std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                            kFrameDuration * 2);
+                            frame_duration(*state) * 2);
                     if (now > state->next_frame_deadline + limit) {
                         state->next_frame_deadline = now;
                     }
@@ -13483,8 +13501,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         // frames per tick, so the picture still updates every frame instead of
         // showing one in four. The audio queue is capped, so the surplus the
         // chips produce at this speed is dropped rather than backing up.
-        const auto budget = state.fast_forward_held ? kFrameDuration / kFastForwardMultiplier
-                                                    : kFrameDuration;
+        const auto budget = state.fast_forward_held ? frame_duration(state) / kFastForwardMultiplier
+                                                    : frame_duration(state);
         state.next_frame_deadline +=
             std::chrono::duration_cast<std::chrono::steady_clock::duration>(budget);
         // A modal loop the timer could not cover - the Open ROM dialog runs its
@@ -13496,7 +13514,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         // than trying to reclaim it.
         const auto now = std::chrono::steady_clock::now();
         const auto catch_up_limit =
-            std::chrono::duration_cast<std::chrono::steady_clock::duration>(kFrameDuration * 2);
+            std::chrono::duration_cast<std::chrono::steady_clock::duration>(frame_duration(state) * 2);
         if (now > state.next_frame_deadline + catch_up_limit) {
             state.next_frame_deadline = now;
         }

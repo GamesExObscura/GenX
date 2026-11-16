@@ -60,6 +60,10 @@ mercury::core::RomLoadResult GameGear::load_rom(const std::filesystem::path& pat
                             : SmsCartridgeDevice{};
     system_control_.set_peripheral(cartridge_device_.peripheral);
     system_control_.set_phaser_x_offset(cartridge_device_.phaser_x_offset);
+    // A European-only Master System cartridge gets a 50Hz console; every other
+    // cartridge, and every Game Gear one, the 60Hz machine as before. Set
+    // after the reset, which starts the frame at line 0 either way.
+    vdp_.set_pal(cartridge_device_.needs_pal);
     return result;
 }
 

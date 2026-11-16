@@ -24,6 +24,10 @@ struct SmsCartridgeDevice {
     // delay between the beam passing the sight and the latch, in counter
     // steps. Most games are made for 20; two expect 16.
     int phaser_x_offset = 20;
+    // Made for a European 50Hz console and refusing a 60Hz one in code (issue
+    // #12): run it on PAL timing. The header can't say so - "export" covers
+    // both.
+    bool needs_pal = false;
 };
 
 [[nodiscard]] std::uint32_t crc32(const std::uint8_t* data, std::size_t size) noexcept;

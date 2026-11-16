@@ -54,6 +54,38 @@ constexpr KnownCartridge kKnown[] = {
     {0x315917D4, SmsPeripheral::paddle},  // Woody Pop
 };
 
+// CARTRIDGES THAT NEED A EUROPEAN 50Hz CONSOLE (issue #12), by CRC32.
+//
+// Back to the Future Part III (Europe), 2D48C1D3, VERIFIED: at $200C it waits
+// for the frame flag, burns about 65,000 cycles in a counted loop, and reads
+// the flag again. A 60Hz frame (262 x 228 = 59,736 cycles) has already ended
+// by then and the game jumps to itself at $202C with interrupts off - a black
+// screen for good. A 50Hz frame (313 x 228 = 71,364) has not, and it runs.
+//
+// The rest are Genesis Plus GX's "games requiring PAL timings", added with the
+// Mega Drive list at the user's request (2026-11-15) without the ROMs to test.
+constexpr std::uint32_t kNeedsPal[] = {
+    0x2D48C1D3,  // Back to the Future Part III
+    0x72420F38,  // The Addams Family
+    0x1CBB7BF1,  // Battlemaniacs (Brazil)
+    0x1B10A951,  // Bram Stoker's Dracula
+    0xC0E25D62,  // California Games II
+    0x45C50294,  // Jogos de Verao II (Brazil)
+    0xC9DBF936,  // Home Alone
+    0xA109A6FE,  // Power Strike II
+    0x0047B615,  // Predator 2
+    0xF42E145C,  // Quest for the Shaven Yak Starring Ren Hoek & Stimpy (Brazil)
+    0x9F951756,  // RoboCop 3
+    0xF8176918,  // Sensible Soccer
+    0x1575581D,  // Shadow of the Beast
+    0x96B3F29E,  // Sonic Blast (Brazil)
+    0x5B3B922C,  // Sonic the Hedgehog 2 (version 0)
+    0xD6F2BFCA,  // Sonic the Hedgehog 2 (version 1)
+    0xCA1D3752,  // Space Harrier (50Hz)
+    0x85CFC9C9,  // Taito Chase H.Q.
+    0x332A847D,  // NBA Jam (prototype)
+};
+
 }  // namespace
 
 std::uint32_t crc32(const std::uint8_t* data, std::size_t size) noexcept {
@@ -82,6 +114,12 @@ SmsCartridgeDevice sms_device_for_rom(const std::vector<std::uint8_t>& rom) noex
     // the rest of the library.
     if (crc == 0x5FC74D2A || crc == 0x5359762D) {
         device.phaser_x_offset = 16;
+    }
+    for (const auto pal_crc : kNeedsPal) {
+        if (pal_crc == crc) {
+            device.needs_pal = true;
+            break;
+        }
     }
     return device;
 }

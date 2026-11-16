@@ -61,11 +61,23 @@ constexpr std::size_t kExtendedMapHeightPixels = 32 * kTileHeight;
 // after the leading blank lines: 43 of them in 192-line mode, 27 in 224-line.
 // Those counts are what make the documented V counter sequences come out right
 // (D5-FF then 00-DA at 192 lines; E5-FF then 00-EA at 224).
-[[nodiscard]] std::size_t active_area_start(const std::array<std::uint8_t, 16>& registers) {
+//
+// A PAL console (313 lines) counts on further before jumping back: 00-F2 then
+// BA-FF at 192 lines, 00-FF, 00-02 then CA-FF at 224. So 70 and 54 lines come
+// before the active area, and the frame interrupt still lands on line $C1.
+[[nodiscard]] std::size_t active_area_start(const std::array<std::uint8_t, 16>& registers,
+                                            bool pal = false) {
+    if (pal) {
+        return extended_line_mode(registers) ? 54 : 70;
+    }
     return extended_line_mode(registers) ? 27 : 43;
 }
 
-[[nodiscard]] std::uint8_t v_counter_wrap_base(const std::array<std::uint8_t, 16>& registers) {
+[[nodiscard]] std::uint8_t v_counter_wrap_base(const std::array<std::uint8_t, 16>& registers,
+                                               bool pal = false) {
+    if (pal) {
+        return extended_line_mode(registers) ? 0xCA : 0xBA;
+    }
     return extended_line_mode(registers) ? 0xE5 : 0xD5;
 }
 
@@ -925,7 +937,7 @@ void Vdp::sanitize_loaded() noexcept {
     // A position within a line is under one line, and a line number under one
     // frame; larger makes the next advance_cycles walk millions of lines.
     cycles_into_scanline_ %= kCpuCyclesPerScanline;
-    scanline_ %= kScanlinesPerFrame;
+    scanline_ %= scanlines_per_frame();
     if (frame_interrupt_assert_delay_cycles_ > kCpuCyclesPerScanline) {
         frame_interrupt_assert_delay_cycles_ = 0;
     }
@@ -961,14 +973,14 @@ void Vdp::advance_cycles(std::uint32_t cpu_cycles) noexcept {
             collision_due_cycle_ = -1;
         }
         cycles_into_scanline_ -= kCpuCyclesPerScanline;
-        scanline_ = (scanline_ + 1) % kScanlinesPerFrame;
+        scanline_ = (scanline_ + 1) % scanlines_per_frame();
         set_v_counter_from_scanline();
         h_counter_ = compute_h_counter(cycles_into_scanline_);
 
         if (scanline_ == 0) {
             vertical_scroll_latch_ = registers_[9];
         }
-        const auto area_start = active_area_start(registers_);
+        const auto area_start = active_area_start(registers_, pal_);
         const auto area_lines = active_display_lines(registers_);
         if (scanline_ >= area_start && scanline_ < area_start + area_lines) {
             horizontal_scroll_latch_[scanline_ - area_start] =
@@ -1320,9 +1332,12 @@ bool Vdp::display_enabled() const noexcept {
 }
 
 bool Vdp::access_requires_wait() const noexcept {
+    // A PAL frame has its active area later (active_area_start); NTSC keeps
+    // the fixed window it has always used.
+    const std::size_t start = pal_ ? active_area_start(registers_, true) : kFrameEffectiveAreaStartScanline;
     return display_enabled() &&
-           scanline_ >= kFrameEffectiveAreaStartScanline &&
-           scanline_ < kFrameEffectiveAreaEndScanline &&
+           scanline_ >= start &&
+           scanline_ < start + kVisibleScanlines &&
            h_counter_ <= 0x93;
 }
 
@@ -1682,9 +1697,11 @@ void Vdp::set_v_counter_from_scanline() noexcept {
     // differs per display height: D5-FF then 00-DA at 192 lines, E5-FF then
     // 00-EA at 224. Either way the frame is 262 lines and the values in the
     // wrap region appear twice.
-    const auto area_start = active_area_start(registers_);
+    // (PAL: 313 lines, see active_area_start. At 224 lines the count past $FF
+    // wraps to 00-02 before the jump, which the 8-bit store gives for free.)
+    const auto area_start = active_area_start(registers_, pal_);
     if (scanline_ < area_start) {
-        v_counter_ = static_cast<std::uint8_t>(v_counter_wrap_base(registers_) + scanline_);
+        v_counter_ = static_cast<std::uint8_t>(v_counter_wrap_base(registers_, pal_) + scanline_);
     } else {
         v_counter_ = static_cast<std::uint8_t>(scanline_ - area_start);
     }

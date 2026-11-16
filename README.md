@@ -39,8 +39,12 @@ GenX does not come with any games or BIOS files. You need your own.
 - 10 save states per game.
 - Rewind and fast forward while a key is held.
 - Turbo (auto-fire).
-- Keyboard, XInput (Xbox-style) and DirectInput controllers.
+- Keyboard, XInput (Xbox-style) and DirectInput controllers. DualShock 4,
+  DualSense and DualShock 3 pads are recognised and set up for you.
+- **Automatic** controller choice: GenX uses whatever pad is plugged in, and the
+  keyboard when there's none.
 - 3-button and 6-button pads, with a saved controller profile for each player.
+- Master System Light Phaser and Paddle Control, aimed with the mouse.
 - **Light guns.** The Menacer and the Justifier are aimed with the mouse. Two
   players can each use their own mouse with a Justifier.
 - **Miracle Piano Teaching System**, with an on-screen keyboard. The keyboard
@@ -122,7 +126,8 @@ games.
 Everything below can be changed in **Configure → Input** and **Configure →
 Hotkeys**.
 
-**Player 1 (keyboard):**
+**Player 1** starts on **Automatic**: a controller if one is plugged in,
+otherwise these keys:
 - D-pad: arrow keys
 - A / B / C: Z / X / C
 - X / Y / Z: A / S / D

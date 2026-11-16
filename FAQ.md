@@ -146,9 +146,15 @@ then choose **File → Open ROM → Sega CD from drive** and pick the drive.
 1. Open **Emulation → Configure → Input**.
 2. Pick the controller type: 3 button, 6 button, Justifier, Menacer or Miracle
    Piano.
-3. Pick the device: Keyboard, XInput or DirectInput.
+3. Pick the device: Keyboard, XInput, DirectInput or Automatic.
+   - Automatic uses whatever is plugged in: an Xbox-style pad first, then any
+     other pad, then the keyboard. The line under the picture says which. New
+     installs start player 1 on it.
    - XInput covers Xbox-style pads, including most modern controllers.
-   - DirectInput covers older or unusual pads.
+   - DirectInput covers older or unusual pads, and PlayStation pads with no
+     extra software. A DualShock 4 or DualSense is recognised and gets its
+     buttons laid out like an Xbox pad's: A, B and C on Square, Cross and
+     Circle, Start on Options.
 4. Click a button's box and press what you want for it. Right-click a box to
    clear it.
 5. **Save as…** keeps the setup as a profile, so you can switch back to it
@@ -166,7 +172,7 @@ settings in **Configure → Input**.
 
 - **Check the status line.** Under the controller picture, the Input tab shows
   "Controller N: connected" or "not found". If it says not found, try the
-  other device type (XInput or DirectInput).
+  other device type (XInput or DirectInput), or Automatic.
 - **Check other programs.** Steam Input, DS4Windows and similar tools can take
   a controller over or move it to a different slot. GenX follows a pad that
   reappears in a new slot, but closing those tools rules them out.

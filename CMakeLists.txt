@@ -105,7 +105,7 @@ target_link_libraries(genx PRIVATE mercury gdiplus dwmapi comdlg32 msimg32 ole32
 # the newest release on GitHub. Bump it with each release. It can be overridden
 # when configuring (-DGENX_VERSION=0.9.0) to test the "new version" message.
 if(NOT GENX_VERSION)
-    set(GENX_VERSION 1.1.3)
+    set(GENX_VERSION 1.1.4)
 endif()
 # A pre-release label such as RC1, empty for a release. Shown after the
 # version ("GenX 1.1.3 RC1") and it makes the update check treat the release
